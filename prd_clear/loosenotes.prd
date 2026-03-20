@@ -1,0 +1,105 @@
+# Project Requirements Document - Loose Notes Web Application
+
+## Technical Stack
+
+- **Framework**: ASP.NET Core MVC
+- **Database**: Relational database with Entity Framework Core
+- **Authentication**: ASP.NET Core Identity
+- **File Storage**: Local file system or cloud storage
+- **Frontend**: Razor Views with JavaScript
+
+## 1. Introduction
+
+The Loose Notes Web Application is a multi-user note-taking platform that allows users to create, manage, share, and rate notes. Users can upload attachments to notes, make notes public or private, and share them with others using generated share links.
+
+This document outlines the functional requirements of the application.
+
+## 2. Requirements Table
+
+| Requirement ID | Description | User Story | Expected Behavior/Outcome |
+|----------------|-------------|------------|---------------------------|
+| REQ-001 | User Registration | As a visitor, I want to create an account so that I can save my notes and access them later. | Users can register with a username (3-50 characters), email address, and password (minimum 8 characters). Username must be unique. Email must be valid format. Registration creates a new user account in the database. |
+| REQ-002 | User Login/Authentication | As a registered user, I want to log in to access my notes. | Users can log in using username and password. Successful authentication creates a session with authentication cookie. Failed attempts return appropriate error message. Session persists until logout or timeout. |
+| REQ-003 | Password Reset | As a user who forgot their password, I want to reset it. | Users can request password reset by email address. System sends email with reset link containing time-limited token (valid 1 hour). Token allows user to set new password meeting minimum requirements. Used or expired tokens are rejected. |
+| REQ-004 | Note Creation | As a logged-in user, I want to create notes with titles and content. | Authenticated users can create notes with title (required, max 200 characters) and content (required, max 50,000 characters). Each note is linked to creator's user ID. Notes default to private visibility. Creation timestamp is automatically recorded. |
+| REQ-005 | File Attachment | As a user, I want to attach files to my notes. | Users can upload files to notes (max 10MB per file, max 5 files per note). Supported formats: PDF, DOC, DOCX, TXT, PNG, JPG, JPEG. Files are stored with unique identifiers. Original filename is preserved in metadata. |
+| REQ-006 | Note Editing | As a note owner, I want to edit my notes. | Note owners can modify title, content, and visibility status (public/private) of their own notes. Only the owner (or admin) can edit notes. Last modified timestamp is updated on save. |
+| REQ-007 | Note Deletion | As a note owner, I want to delete my notes when I no longer need them. | Note owners can delete their notes. System displays confirmation prompt before deletion. Deletion removes note, all attachments, associated ratings, and share links from database permanently. Only owner or admin can delete notes. |
+| REQ-008 | Note Sharing | As a note owner, I want to share my notes with specific people. | Note owners can generate unique share links for their notes (public or private). Share links are randomly generated tokens (minimum 32 characters). Anyone with the link can view the note content and attachments without authentication. Share links can be regenerated or revoked by owner. |
+| REQ-009 | Public/Private Notes | As a note owner, I want to control whether my notes are publicly accessible. | Notes have visibility toggle: public or private. Public notes appear in search results for all users and are viewable by anyone. Private notes are only visible to owner and only appear in owner's search results. Default is private. |
+| REQ-010 | Note Rating | As a user, I want to rate notes to provide feedback. | Authenticated users can rate notes with 1-5 star rating (required) and optional comment (max 1000 characters). Users can rate each note only once. Ratings are visible to all users viewing the note. Users can edit their own rating. |
+| REQ-011 | Rating Management | As a note owner, I want to see ratings for my notes. | Note owners can view list of all ratings on their notes including: rating value, comment, rater username, and timestamp. Average rating is calculated and displayed. Ratings are sorted by date (newest first). |
+| REQ-012 | Note Search | As a user, I want to search for notes by keywords. | All users can search notes by keywords matching title or content (case-insensitive). Search returns: owned notes (any visibility), public notes from other users. Private notes from other users are excluded. Results show title, excerpt (first 200 characters), author, and creation date. |
+| REQ-013 | Admin Dashboard | As an administrator, I want to manage users and content. | Users with admin role can access admin dashboard showing: total user count, total note count, recent activity log. Admins can view list of all users with registration date and note count. Admins can search users by username or email. |
+| REQ-014 | User Profile Management | As a user, I want to edit my profile information. | Users can update their own username (must remain unique), email address (must be valid format), and password (requires current password confirmation). Changes are saved to database. Email changes may require verification. |
+| REQ-015 | Top Rated Notes | As a user, I want to see the highest-rated notes. | All users can view "Top Rated" page displaying public notes sorted by average rating (descending). Each entry shows: note title, author, average rating, number of ratings, and preview. Minimum 3 ratings required to appear in top rated list. |
+| REQ-016 | Note Ownership Reassignment | As an admin, I want to reassign notes to different users if needed. | Admin users can change the owner (user_id) of any note to a different existing user. Action is logged with timestamp, admin user, old owner, and new owner. New owner gains full ownership permissions. |
+
+## 3. Feature Requirements by User Role
+
+### Regular Users
+- Register and log in to the application
+- Create, edit, view, and delete personal notes
+- Attach files to notes
+- Search for notes (owned and public)
+- Share notes with others via share links
+- Rate and comment on notes
+- Mark notes as public or private
+- View profile information and edit personal details
+- Reset password if forgotten
+
+### Admin Users
+- All regular user functionalities
+- View all users and their information
+- Reassign note ownership between users
+- View activity logs
+
+## 4. Technical Requirements
+
+### 4.1 Architecture
+- Application uses ASP.NET Core MVC pattern
+- Controllers handle HTTP requests and return views or redirect results
+- Models represent database entities using Entity Framework Core
+- Views use Razor syntax for server-side rendering
+
+### 4.2 Database
+- Use Entity Framework Core with relational database (SQL Server, PostgreSQL, or SQLite)
+- Required tables: Users, Notes, Attachments, Ratings, ShareLinks
+- Foreign key relationships maintain referential integrity
+- Indexes on frequently queried fields (username, note_user_id, search fields)
+
+### 4.3 Authentication & Authorization
+- Implement ASP.NET Core Identity for user management
+- Use cookie-based authentication
+- Role-based authorization with two roles: User (default) and Admin
+- Protect controller actions with [Authorize] attributes
+- Implement ownership checks before edit/delete operations
+
+### 4.4 File Handling
+- Store uploaded files with unique generated filenames to prevent collisions
+- Maintain original filename in database metadata
+- Validate file extensions and size limits before accepting uploads
+- Files stored in configured directory or cloud storage service
+
+### 4.5 User Interface
+- Responsive design supporting desktop, tablet, and mobile viewports
+- Use Bootstrap or similar CSS framework
+- Forms include validation messages
+- Navigation shows different options for regular users vs admins
+
+### 4.6 Security Best Practices
+- Hash passwords using ASP.NET Core Identity (uses PBKDF2)
+- Use parameterized queries via Entity Framework to prevent SQL injection
+- Encode output in views to prevent XSS
+- Include anti-forgery tokens on state-changing forms
+- Verify user ownership/permissions before allowing operations
+
+### 4.7 Logging
+- Log authentication events (login, logout, failed attempts)
+- Log administrative actions (note reassignment, user management)
+- Log application errors with stack traces
+- Do not log sensitive data (passwords, tokens)
+
+## 5. Conclusion
+
+The Loose Notes Web Application provides a platform for creating, sharing, and rating notes. This document serves as a guide for implementing the required features to create a functional note-taking application.
