@@ -99,9 +99,9 @@ function Assert-Tool([string]$Name) {
 # Helper: Run Copilot CLI agent non-interactively in a given directory.
 #
 #   GitHub Copilot CLI non-interactive invocation:
-#     copilot agent run --prompt-file <file> --yes
+#     copilot -p "..." --allow-all
 #
-#   --yes suppresses all interactive confirmations. The agent writes files
+#   --allow-all suppresses all interactive confirmations. The agent writes files
 #   directly into the working directory, so we Push-Location into the
 #   target folder first.
 #
@@ -130,34 +130,23 @@ function Invoke-CopilotAgent {
     Write-Host "  Output dir : $WorkingDir"
     Write-Host "  Log file   : $logFile"
 
-    # Write prompt to a temp file to avoid shell quoting issues with multi-line strings
-    $promptFile = Join-Path $env:TEMP "copilot_prompt_$([System.IO.Path]::GetRandomFileName()).txt"
+    Push-Location $WorkingDir
     try {
-        Set-Content -Path $promptFile -Value $Prompt -Encoding UTF8
+        # Newer Copilot CLI versions use top-level -p for non-interactive runs.
+        copilot -p $Prompt --allow-all 2>&1 |
+            Tee-Object -FilePath $logFile
 
-        Push-Location $WorkingDir
-        try {
-            copilot agent run --prompt-file $promptFile --yes 2>&1 |
-                Tee-Object -FilePath $logFile
-
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "copilot agent run exited with code $LASTEXITCODE for $Label - check $logFile"
-            }
-        }
-        finally {
-            Pop-Location
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "copilot -p exited with code $LASTEXITCODE for $Label - check $logFile"
         }
     }
     finally {
-        if (Test-Path $promptFile) { Remove-Item $promptFile -Force }
+        Pop-Location
     }
 }
 
 # ---------------------------------------------------------------------------
 # Helper: Install the securable-claude-plugin into a target directory.
-#
-#   Copilot CLI skill discovery includes <project>/.claude/skills/ (position 3
-#   in the priority list), so the same layout Claude Code uses is picked up
 #   automatically by Copilot CLI too.
 #
 #   Copied assets:
@@ -386,8 +375,8 @@ foreach ($langKey in $Languages.Keys) {
 Write-Host ""
 Write-Host "Each folder contains a copilot-output.log with the full CLI response." -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "NOTE: If 'copilot agent run --prompt-file' is not available in your" -ForegroundColor DarkYellow
-Write-Host "      version of the CLI, check 'copilot agent run --help' and update" -ForegroundColor DarkYellow
+Write-Host "NOTE: This script targets newer Copilot CLI versions using 'copilot -p'." -ForegroundColor DarkYellow
+Write-Host "      If your CLI differs, check 'copilot --help' and adjust" -ForegroundColor DarkYellow
 Write-Host "      the Invoke-CopilotAgent function in this script accordingly." -ForegroundColor DarkYellow
 
 if ($DryRun) {
