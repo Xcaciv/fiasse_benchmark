@@ -103,8 +103,9 @@ function Invoke-Claude {
 
     Push-Location $WorkingDir
     try {
-        # Pipe the prompt via stdin; --print keeps Claude non-interactive
-        $Prompt | claude --print 2>&1 | Tee-Object -FilePath $logFile
+        # Pipe the prompt via stdin; --print keeps Claude non-interactive.
+        # bypassPermissions prevents interactive write approval prompts.
+        $Prompt | claude --print --permission-mode bypassPermissions 2>&1 | Tee-Object -FilePath $logFile
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Claude exited with code $LASTEXITCODE for $Label - check $logFile"
         }
