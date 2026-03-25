@@ -224,7 +224,6 @@ function Install-SecurableCopilotPlugin {
 
     $assets = @(
         @{ Src = ".claude";   Dst = ".claude"   }
-        @{ Src = "skills";    Dst = "skills"    }
         @{ Src = "data";      Dst = "data"      }
         @{ Src = "CLAUDE.md"; Dst = "CLAUDE.md" }
     )
@@ -236,6 +235,16 @@ function Install-SecurableCopilotPlugin {
             Copy-Item -Recurse -Force $srcPath $dstPath
             Write-Host "  Installed $($asset.Src) -> $dstPath" -ForegroundColor DarkGray
         }
+    }
+
+    # Copilot CLI discovers skills at <project>/.claude/skills/ — merge the
+    # plugin's top-level skills/ directory into that path so the CLI finds them.
+    $skillsSrc = Join-Path $PluginSource "skills"
+    if (Test-Path $skillsSrc) {
+        $skillsDst = Join-Path $TargetDir ".claude" "skills"
+        New-Item -ItemType Directory -Force -Path $skillsDst | Out-Null
+        Copy-Item -Recurse -Force (Join-Path $skillsSrc "*") $skillsDst
+        Write-Host "  Installed skills/ -> $skillsDst" -ForegroundColor DarkGray
     }
 }
 

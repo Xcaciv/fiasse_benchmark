@@ -174,12 +174,20 @@ install_plugin() {
     local src="$1"
     local dst="$2"
 
-    for asset in ".claude" "skills" "data"; do
+    for asset in ".claude" "data"; do
         if [[ -d "$src/$asset" ]]; then
             cp -r "$src/$asset" "$dst/"
             _gray "  Installed $asset/ -> $dst/$asset"
         fi
     done
+
+    # Copilot CLI discovers skills at <project>/.claude/skills/ — merge the
+    # plugin's top-level skills/ directory into that path so the CLI finds them.
+    if [[ -d "$src/skills" ]]; then
+        mkdir -p "$dst/.claude/skills"
+        cp -r "$src/skills/"* "$dst/.claude/skills/" 2>/dev/null || true
+        _gray "  Installed skills/ -> $dst/.claude/skills"
+    fi
 
     if [[ -f "$src/CLAUDE.md" ]]; then
         cp "$src/CLAUDE.md" "$dst/CLAUDE.md"
