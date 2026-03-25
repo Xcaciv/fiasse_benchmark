@@ -163,16 +163,27 @@ function Invoke-CopilotAgent {
 
     Push-Location $WorkingDir
     try {
-        # Copilot CLI no longer supports --prompt-file. Persist prompt to a temp file,
-        # read it back as a single raw string, and pass it via -p safely.
+        # Persist prompt to a temp file and pass the file path via -p.
         $promptFile = Join-Path $env:TEMP "copilot_prompt_$([System.IO.Path]::GetRandomFileName()).txt"
+        Write-Host "  Running in $WorkingDir using temp prompt file: $promptFile" -ForegroundColor DarkGray
         try {
             Set-Content -Path $promptFile -Value $Prompt -Encoding UTF8
-            $promptFromFile = Get-Content -Path $promptFile -Raw -Encoding UTF8
 
-            $copilotArgs = @("-p", $promptFromFile, "--allow-all", "--no-alt-screen")
-            & copilot @copilotArgs 2>&1 |
-                Tee-Object -FilePath $logFile
+            $copilotArgs = @("--allow-all-tools", "--add-dir", $WorkingDir, "--allow-all-urls", "--no-alt-screen")
+            if ($Resume) {
+                $copilotArgs += "--resume"
+            }
+            $copilotArgs += @("-p", $promptFile)
+
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & copilot @copilotArgs 2>&1 |
+                    Tee-Object -FilePath $logFile
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
 
             if ($LASTEXITCODE -ne 0) {
                 Write-Warning "copilot -p exited with code $LASTEXITCODE for $Label - check $logFile"
