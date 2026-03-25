@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run-codegen-copilot-claude-plugin.sh
+# run-codegen-copilot.sh
 #
 # Automates GitHub Copilot CLI to generate a project from a PRD in 3 languages,
 # each with a "rawdog" (plain) and "securable" (FIASSE plugin) variant.
 #
-# Uses the securable-claude-plugin for the securable runs.  Copilot CLI's skill
-# discovery path includes <project>/.claude/skills/, so the Claude plugin layout
-# is natively compatible with Copilot CLI — no adapter needed.
+# Uses the securable-copilot plugin (.github/ layout) for the securable runs.
+# The plugin provides prompts, agents, and copilot-instructions.md inside
+# .github/, which Copilot CLI discovers natively.
 #
 # Output structure:
 #   <output-dir>/
 #     aspnet/
 #       rawdog/     <- Plain Copilot generation
-#       securable/  <- Generation with securable-claude-plugin active
+#       securable/  <- Generation with securable-copilot active
 #     jsp/
 #       rawdog/
 #       securable/
@@ -22,13 +22,13 @@
 #       securable/
 #
 # Usage:
-#   ./run-codegen-copilot-claude-plugin.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume]
-#   ./run-codegen-copilot-claude-plugin.sh --clean [--output-dir <dir>]
+#   ./run-codegen-copilot.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume]
+#   ./run-codegen-copilot.sh --clean [--output-dir <dir>]
 #
 # Options:
 #   --prd          Path to your PRD markdown or text file (required unless --clean)
 #   --output-dir   Root folder for generated output (default: ./copilot-codegen-output)
-#   --plugin-repo  Git URL of the securable-claude-plugin (default: canonical repo)
+#   --plugin-repo  Git URL of the securable-copilot repo (default: canonical repo)
 #   --dry-run      Print what would run without calling Copilot CLI
 #   --resume       Skip completed variations and preserve existing directories
 #   --clean        Remove cached plugin clone and finished flags, then exit
@@ -38,15 +38,10 @@
 #   - bash 4+, git, copilot (GitHub Copilot CLI), tee, mktemp
 #
 # Examples:
-#   ./run-codegen-copilot-claude-plugin.sh --prd ./my-prd.md
-#   ./run-codegen-copilot-claude-plugin.sh --prd ./my-prd.md --output-dir ~/tests/copilot --dry-run
-#   ./run-codegen-copilot-claude-plugin.sh --prd ./my-prd.md --resume
-#   ./run-codegen-copilot-claude-plugin.sh --clean --output-dir ~/tests/copilot
-#
-# NOTE — Copilot CLI flag compatibility:
-#   This script uses `copilot agent run --prompt-file <file> --yes`.
-#   If your version of the CLI uses a different flag name, update the
-#   invoke_copilot() function below.  Check with `copilot agent run --help`.
+#   ./run-codegen-copilot.sh --prd ./my-prd.md
+#   ./run-codegen-copilot.sh --prd ./my-prd.md --output-dir ~/tests/copilot --dry-run
+#   ./run-codegen-copilot.sh --prd ./my-prd.md --resume
+#   ./run-codegen-copilot.sh --clean --output-dir ~/tests/copilot
 # =============================================================================
 
 set -euo pipefail
@@ -68,7 +63,7 @@ write_step() { echo; _cyan ">>> $*"; }
 # -----------------------------------------------------------------------------
 PRD_FILE=""
 OUTPUT_DIR="./copilot-codegen-output"
-PLUGIN_REPO="https://github.com/Xcaciv/securable-claude-plugin.git"
+PLUGIN_REPO="https://github.com/Xcaciv/securable-copilot.git"
 DRY_RUN=false
 RESUME=false
 CLEAN=false
@@ -117,7 +112,7 @@ OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
 if [[ "$CLEAN" == true ]]; then
     _magenta ">>> Cleaning cache files from $OUTPUT_DIR"
 
-    PLUGIN_TEMP="$OUTPUT_DIR/_securable_claude_plugin_temp"
+    PLUGIN_TEMP="$OUTPUT_DIR/_securable_copilot_temp"
     if [[ -d "$PLUGIN_TEMP" ]]; then
         _yellow "  Removing plugin cache: $PLUGIN_TEMP"
         rm -rf "$PLUGIN_TEMP"
@@ -166,56 +161,54 @@ assert_tool() {
 # -----------------------------------------------------------------------------
 # install_plugin  <plugin-source-dir>  <target-dir>
 #
-# Copies .claude/, CLAUDE.md, skills/, and data/ into the target directory.
-# Copilot CLI's skill discovery includes <project>/.claude/skills/ (position 3
-# in its resolution order), making this plugin layout natively compatible.
+# Copies .github/ from the cloned securable-copilot repo into the target
+# directory.  The .github/ directory contains prompts/, agents/, and
+# copilot-instructions.md that Copilot CLI discovers natively.
 # -----------------------------------------------------------------------------
 install_plugin() {
     local src="$1"
     local dst="$2"
 
-    for asset in ".claude" "skills" "data"; do
-        if [[ -d "$src/$asset" ]]; then
-            cp -r "$src/$asset" "$dst/"
-            _gray "  Installed $asset/ -> $dst/$asset"
-        fi
-    done
-
-    if [[ -f "$src/CLAUDE.md" ]]; then
-        cp "$src/CLAUDE.md" "$dst/CLAUDE.md"
-        _gray "  Installed CLAUDE.md -> $dst/CLAUDE.md"
+    if [[ -d "$src/.github" ]]; then
+        cp -r "$src/.github" "$dst/"
+        _gray "  Installed .github/ -> $dst/.github"
+    else
+        _yellow "  WARNING: Plugin .github/ directory not found at $src/.github"
     fi
 }
 
 # -----------------------------------------------------------------------------
 # get_secure_instructions  <plugin-source-dir>
 #
-# Reads CLAUDE.md and the /secure-generate command definition, printing them
-# to stdout for inline embedding in the prompt.  Belt-and-suspenders: ensures
-# the constraints are present even in headless (--yes) mode where the CLI may
-# not auto-load project context files.
+# Reads copilot-instructions.md and prompt files from the securable-copilot
+# plugin, printing them to stdout for inline embedding in the prompt.
 # -----------------------------------------------------------------------------
 get_secure_instructions() {
     local src="$1"
-    local claude_md="$src/CLAUDE.md"
-    local cmd_file="$src/.claude/commands/secure-generate.md"
+    local instr_file="$src/.github/copilot-instructions.md"
     local output=""
 
-    if [[ -f "$claude_md" ]]; then
-        output+="$(cat "$claude_md")"$'\n\n'
+    if [[ -f "$instr_file" ]]; then
+        output+="$(cat "$instr_file")"$'\n\n'
     fi
 
-    if [[ -f "$cmd_file" ]]; then
-        output+="---"$'\n'"# /secure-generate command definition"$'\n'
-        output+="$(cat "$cmd_file")"$'\n'
-    fi
+    # Also include prompt files for additional context
+    for prompt_file in "$src/.github/prompts/input-handling.prompt.md" \
+                       "$src/.github/prompts/security-requirements.prompt.md"; do
+        if [[ -f "$prompt_file" ]]; then
+            local basename
+            basename="$(basename "$prompt_file")"
+            output+="---"$'\n'"# $basename"$'\n'
+            output+="$(cat "$prompt_file")"$'\n\n'
+        fi
+    done
 
     if [[ -n "$output" ]]; then
         printf '%s' "$output"
         return
     fi
 
-    # Fallback if repo layout differs
+    # Fallback if plugin files not found
     cat <<'FALLBACK'
 Apply FIASSE/SSEM securability engineering principles as hard constraints.
 Satisfy all nine SSEM attributes:
@@ -229,14 +222,46 @@ FALLBACK
 }
 
 # -----------------------------------------------------------------------------
+# set_copilot_write_permissions  <target-dir>  <allowed-dirs...>
+#
+# Writes .claude/claude.json with allowed_write_directories so Copilot CLI
+# can write to the target directories without interactive prompts.
+# -----------------------------------------------------------------------------
+set_copilot_write_permissions() {
+    local target_dir="$1"
+    shift
+    local allowed_dirs=("$@")
+
+    local claude_dir="$target_dir/.claude"
+    local claude_json="$claude_dir/claude.json"
+
+    mkdir -p "$claude_dir"
+
+    # Build JSON array of allowed directories
+    local dirs_json="["
+    local first=true
+    for dir in "${allowed_dirs[@]}"; do
+        if [[ "$first" == true ]]; then
+            first=false
+        else
+            dirs_json+=","
+        fi
+        dirs_json+="\"$dir\""
+    done
+    dirs_json+="]"
+
+    cat > "$claude_json" <<EOF
+{
+  "allowed_write_directories": $dirs_json
+}
+EOF
+}
+
+# -----------------------------------------------------------------------------
 # invoke_copilot  <working-dir>  <prompt-file>  <label>
 #
-# Runs `copilot agent run --prompt-file <file> --yes` in the given directory.
-# The agent writes generated files directly into the working directory.
+# Runs copilot with --allow-tool=write in the given directory.
 # Output is tee'd to copilot-output.log.
-#
-# If your version of the Copilot CLI uses a different flag for supplying the
-# prompt, update the copilot invocation line below.
 # -----------------------------------------------------------------------------
 invoke_copilot() {
     local working_dir="$1"
@@ -256,19 +281,25 @@ invoke_copilot() {
 
     (
         cd "$working_dir"
-        local copilot_args=("agent" "run" "--prompt-file" "$prompt_file" "--yes")
+        local copilot_args=(
+            "--allow-tool=write"
+            "--add-dir" "$working_dir"
+            "--allow-all-urls"
+            "--no-alt-screen"
+        )
         if [[ "$RESUME" == true ]]; then
             copilot_args+=("--resume")
         fi
+        copilot_args+=("-p" "$prompt_file")
         copilot "${copilot_args[@]}" 2>&1 | tee "$log_file"
-    ) || _yellow "  WARNING: copilot agent run exited non-zero for $label — check $log_file"
+    ) || _yellow "  WARNING: copilot exited non-zero for $label — check $log_file"
 }
 
 # =============================================================================
 # MAIN
 # =============================================================================
 
-_magenta ">>> Starting Copilot CLI codegen run (securable-claude-plugin)"
+_magenta ">>> Starting Copilot CLI codegen run (securable-copilot)"
 _gray "  PRD file   : $PRD_FILE"
 _gray "  Output dir : $OUTPUT_DIR"
 _gray "  Dry run    : $DRY_RUN"
@@ -289,25 +320,31 @@ mkdir -p "$OUTPUT_DIR"
 # ---------------------------------------------------------------------------
 # Step 1 — Clone the plugin once
 # ---------------------------------------------------------------------------
-PLUGIN_TEMP="$OUTPUT_DIR/_securable_claude_plugin_temp"
+PLUGIN_TEMP="$OUTPUT_DIR/_securable_copilot_temp"
 
 if [[ -d "$PLUGIN_TEMP" ]]; then
     write_step "Plugin already cloned at $PLUGIN_TEMP — skipping clone"
 else
-    write_step "Cloning securable-claude-plugin ..."
+    write_step "Cloning securable-copilot ..."
     if [[ "$DRY_RUN" == true ]]; then
         _yellow "  [DRY-RUN] git clone $PLUGIN_REPO $PLUGIN_TEMP"
-        mkdir -p "$PLUGIN_TEMP/.claude/commands"
-        mkdir -p "$PLUGIN_TEMP/skills"
-        mkdir -p "$PLUGIN_TEMP/data"
-        echo "# securable-claude-plugin stub (dry-run)"    > "$PLUGIN_TEMP/CLAUDE.md"
-        echo "# secure-generate stub (dry-run)"            > "$PLUGIN_TEMP/.claude/commands/secure-generate.md"
+        mkdir -p "$PLUGIN_TEMP/.github/prompts"
+        mkdir -p "$PLUGIN_TEMP/.github/agents"
+        echo "# securable-copilot stub (dry-run)" > "$PLUGIN_TEMP/.github/copilot-instructions.md"
     else
         git clone "$PLUGIN_REPO" "$PLUGIN_TEMP"
     fi
 fi
 
 SECURE_INSTRUCTIONS="$(get_secure_instructions "$PLUGIN_TEMP")"
+
+# Collect all target dirs for write permissions
+ALL_TARGET_DIRS=()
+for lang_key in "${LANG_KEYS[@]}"; do
+    for m in rawdog securable; do
+        ALL_TARGET_DIRS+=("$OUTPUT_DIR/$lang_key/$m")
+    done
+done
 
 # ---------------------------------------------------------------------------
 # Step 2 — Loop over languages × modes
@@ -355,19 +392,9 @@ for lang_key in "${LANG_KEYS[@]}"; do
         fi
         mkdir -p "$target_dir"
 
-        # ------------------------------------------------------------------
-        # Isolation: install an empty CLAUDE.md into rawdog directories as a
-        # context fence.  Both Claude Code and Copilot CLI stop their upward
-        # directory walk when they find a CLAUDE.md, so this prevents plugin
-        # files in any parent directory from bleeding into the plain run.
-        # ------------------------------------------------------------------
-        if [[ "$mode" == "rawdog" ]]; then
-            cat > "$target_dir/CLAUDE.md" <<'FENCE'
-# codegen-test: rawdog baseline
-# This file exists only to prevent context from parent directories
-# being loaded into this isolated test run.  Do not add instructions here.
-FENCE
-        fi
+        # NOTE: No CLAUDE.md context fence is needed for rawdog directories here.
+        # The securable-copilot plugin uses .github/ layout (not CLAUDE.md), so
+        # there is no risk of upward directory context loading from parent dirs.
 
         if [[ "$mode" == "rawdog" ]]; then
             cat > "$PROMPT_TMP" <<PROMPT
@@ -390,13 +417,12 @@ PROMPT
             install_plugin "$PLUGIN_TEMP" "$target_dir"
 
             cat > "$PROMPT_TMP" <<PROMPT
-You are operating with the securable-claude-plugin active (CLAUDE.md and
-.claude/commands/ are present in this directory).
+You are operating with the securable-copilot FIASSE plugin active.
+The following securability engineering instructions and prompts are your
+primary constraints — treat them as non-negotiable design requirements,
+not optional guidelines.
 
-The following securability engineering instructions are your primary
-constraints — treat them as non-negotiable design requirements.
-
-=== SECURABLE-CLAUDE-PLUGIN INSTRUCTIONS ===
+=== SECURABLE-COPILOT PLUGIN INSTRUCTIONS ===
 ${SECURE_INSTRUCTIONS}
 === END PLUGIN INSTRUCTIONS ===
 
@@ -420,6 +446,11 @@ ${PRD_CONTENT}
 PROMPT
         fi
 
+        # Set write permissions
+        if [[ "$DRY_RUN" == false ]]; then
+            set_copilot_write_permissions "$target_dir" "${ALL_TARGET_DIRS[@]}"
+        fi
+
         invoke_copilot "$target_dir" "$PROMPT_TMP" "$lang_key / $mode"
     done
 done
@@ -437,10 +468,6 @@ for lang_key in "${LANG_KEYS[@]}"; do
 done
 echo
 _gray "Each folder contains a copilot-output.log with the full CLI response."
-echo
-_yellow "NOTE: If 'copilot agent run --prompt-file' is not recognised by your"
-_yellow "      version of the CLI, check 'copilot agent run --help' and update"
-_yellow "      the invoke_copilot() function in this script accordingly."
 
 if [[ "$DRY_RUN" == true ]]; then
     echo

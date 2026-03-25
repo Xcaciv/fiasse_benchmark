@@ -302,19 +302,14 @@ When `DryRun` is active, the script MUST:
 | PowerShell | `claude` | `securable-claude-plugin` | `PowerShell/run-codegen-claude.ps1` | Implemented |
 | PowerShell | `copilot` | `securable-claude-plugin` | `PowerShell/run-codegen-copilot-claude-plugin.ps1` | Implemented |
 | PowerShell | `copilot` | `securable-copilot` | `PowerShell/run-codegen-copilot.ps1` | Implemented |
-| bash | `claude` | `securable-claude-plugin` | `bash/run-codegen-claude.sh` | Implemented (missing `Resume`, `Clean`, `[finished_flag_file]`) |
-| bash | `copilot` | `securable-claude-plugin` | `bash/run-codegen-copilot-claude-plugin.sh` | Implemented (missing `Resume`, `Clean`, `[finished_flag_file]`) |
-| bash | `copilot` | `securable-copilot` | `bash/run-codegen-copilot.sh` | Not yet created |
 | PowerShell | `opencode` | `securable-opencode-module` | `PowerShell/run-codegen-opencode.ps1` | Implemented |
-| bash | `opencode` | `securable-opencode-module` | `bash/run-codegen-opencode.sh` | Not yet created |
+| bash | `claude` | `securable-claude-plugin` | `bash/run-codegen-claude.sh` | Implemented |
+| bash | `copilot` | `securable-claude-plugin` | `bash/run-codegen-copilot-claude-plugin.sh` | Implemented |
+| bash | `copilot` | `securable-copilot` | `bash/run-codegen-copilot.sh` | Implemented |
+| bash | `opencode` | `securable-opencode-module` | `bash/run-codegen-opencode.sh` | Implemented |
 
 ---
 
-## 10. Known Gaps — Bash Scripts
+## 10. Known Gaps
 
-The existing bash scripts are missing the following features that are present in the PowerShell implementations:
-
-1. **`--resume` flag** — bash scripts always wipe and recreate target directories. They should support `--resume` to skip completed variations (where `[finished_flag_file]` exists) and preserve existing content.
-2. **`--clean` flag** — bash scripts have no cache cleanup mode. They should support `--clean` to remove `[plugin_temp_dir_name]` and all `[finished_flag_file]` flags, then exit.
-3. **`[finished_flag_file]` creation** — bash prompts do not instruct the LLM to create `[finished_flag_file]` upon completion. The prompt should include this instruction.
-4. **`bash/run-codegen-copilot.sh`** — no bash implementation exists for the `copilot` + `securable-copilot` combination.
+All previously identified gaps (bash `--resume`, `--clean`, `[finished_flag_file]` in prompts, and missing script variants) have been resolved. All shell × tool × plugin combinations in the matrix above are fully implemented.

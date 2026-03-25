@@ -18,13 +18,16 @@
 #       securable/
 #
 # Usage:
-#   ./run-codegen-claude.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run]
+#   ./run-codegen-claude.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume]
+#   ./run-codegen-claude.sh --clean [--output-dir <dir>]
 #
 # Options:
-#   --prd          Path to your PRD markdown or text file (required)
+#   --prd          Path to your PRD markdown or text file (required unless --clean)
 #   --output-dir   Root folder for generated output (default: ./codegen-output)
 #   --plugin-repo  Git URL of the securable-claude-plugin (default: canonical repo)
 #   --dry-run      Print what would run without calling Claude Code
+#   --resume       Skip completed variations and preserve existing directories
+#   --clean        Remove cached plugin clone and finished flags, then exit
 #   -h, --help     Show this help text
 #
 # Requirements:
@@ -33,6 +36,8 @@
 # Examples:
 #   ./run-codegen-claude.sh --prd ./my-prd.md
 #   ./run-codegen-claude.sh --prd ./my-prd.md --output-dir ~/projects/codegen --dry-run
+#   ./run-codegen-claude.sh --prd ./my-prd.md --resume
+#   ./run-codegen-claude.sh --clean --output-dir ~/projects/codegen
 # =============================================================================
 
 set -euo pipefail
@@ -56,6 +61,9 @@ PRD_FILE=""
 OUTPUT_DIR="./codegen-output"
 PLUGIN_REPO="https://github.com/Xcaciv/securable-claude-plugin.git"
 DRY_RUN=false
+RESUME=false
+CLEAN=false
+FINISHED_FLAG=".codegen-finished"
 
 # -----------------------------------------------------------------------------
 # Language definitions  (keys and labels kept in parallel arrays for bash 3
@@ -85,6 +93,8 @@ while [[ $# -gt 0 ]]; do
         --output-dir)   OUTPUT_DIR="$2";  shift 2 ;;
         --plugin-repo)  PLUGIN_REPO="$2"; shift 2 ;;
         --dry-run)      DRY_RUN=true;     shift   ;;
+        --resume)       RESUME=true;      shift   ;;
+        --clean)        CLEAN=true;       shift   ;;
         -h|--help)      usage ;;
         *) _red "Unknown option: $1"; usage ;;
     esac
@@ -93,6 +103,34 @@ done
 # -----------------------------------------------------------------------------
 # Validation
 # -----------------------------------------------------------------------------
+OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
+
+# --clean mode: early exit — no PRD required
+if [[ "$CLEAN" == true ]]; then
+    _magenta ">>> Cleaning cache files from $OUTPUT_DIR"
+
+    PLUGIN_TEMP="$OUTPUT_DIR/_plugin_temp"
+    if [[ -d "$PLUGIN_TEMP" ]]; then
+        _yellow "  Removing plugin cache: $PLUGIN_TEMP"
+        rm -rf "$PLUGIN_TEMP"
+    else
+        _gray "  Plugin cache not found (already clean)"
+    fi
+
+    flags_removed=0
+    if [[ -d "$OUTPUT_DIR" ]]; then
+        while IFS= read -r -d '' flag_file; do
+            _yellow "  Removing finished flag: $flag_file"
+            rm -f "$flag_file"
+            ((flags_removed++))
+        done < <(find "$OUTPUT_DIR" -name "$FINISHED_FLAG" -print0 2>/dev/null)
+    fi
+    _gray "  Removed $flags_removed finished flag(s)."
+
+    _magenta ">>> Clean complete."
+    exit 0
+fi
+
 if [[ -z "$PRD_FILE" ]]; then
     _red "Error: --prd is required."
     usage
@@ -105,7 +143,6 @@ fi
 
 # Resolve to absolute path
 PRD_FILE="$(cd "$(dirname "$PRD_FILE")" && pwd)/$(basename "$PRD_FILE")"
-OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
 
 # -----------------------------------------------------------------------------
 # Prerequisite check
@@ -171,11 +208,14 @@ get_secure_instructions() {
 
     # Fallback if repo layout differs
     cat <<'FALLBACK'
-Apply FIASSE/SSEM securability engineering principles as hard constraints
-while generating the code. Ensure the output scores well across the nine
-SSEM attributes: Analyzability, Modifiability, Testability, Confidentiality,
-Accountability, Authenticity, Availability, Integrity, and Resilience.
-Use the /secure-generate approach from the securable-claude-plugin.
+Apply FIASSE/SSEM securability engineering principles as hard constraints.
+Satisfy all nine SSEM attributes:
+  Maintainability: Analyzability, Modifiability, Testability
+  Trustworthiness: Confidentiality, Accountability, Authenticity
+  Reliability:     Availability, Integrity, Resilience
+Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all
+trust boundaries. Enforce the Derived Integrity Principle for business-critical
+values. Produce structured audit logging for all accountable actions.
 FALLBACK
 }
 
@@ -202,9 +242,10 @@ invoke_claude() {
     _gray "  Log file   : $log_file"
 
     # cd into the target dir so Claude Code picks up CLAUDE.md / .claude/
+    # --permission-mode bypassPermissions prevents interactive write approval prompts
     (
         cd "$working_dir"
-        claude --print < "$prompt_file" 2>&1 | tee "$log_file"
+        claude --print --permission-mode bypassPermissions < "$prompt_file" 2>&1 | tee "$log_file"
     ) || _yellow "  WARNING: claude exited non-zero for $label — check $log_file"
 }
 
@@ -216,6 +257,7 @@ _magenta ">>> Starting Claude Code codegen run"
 _gray "  PRD file   : $PRD_FILE"
 _gray "  Output dir : $OUTPUT_DIR"
 _gray "  Dry run    : $DRY_RUN"
+_gray "  Resume     : $RESUME"
 
 write_step "Checking prerequisites ..."
 if [[ "$DRY_RUN" == false ]]; then
@@ -266,18 +308,37 @@ for lang_key in "${LANG_KEYS[@]}"; do
 
     for mode in rawdog securable; do
         target_dir="$OUTPUT_DIR/$lang_key/$mode"
+        finished_flag_path="$target_dir/$FINISHED_FLAG"
 
         # ------------------------------------------------------------------
-        # Isolation: remove any prior run output so generation always starts
-        # from a clean, empty directory.  This prevents the AI from seeing
-        # leftover files from a previous run as project context.
+        # Resume: skip completed variations
+        # ------------------------------------------------------------------
+        if [[ "$RESUME" == true ]] && [[ -f "$finished_flag_path" ]]; then
+            if [[ "$DRY_RUN" == true ]]; then
+                _yellow "  [DRY-RUN] Would skip completed variation: $target_dir"
+            else
+                _green "  Skipping completed variation: $target_dir"
+            fi
+            continue
+        fi
+
+        # ------------------------------------------------------------------
+        # Directory preparation
         # ------------------------------------------------------------------
         if [[ -d "$target_dir" ]]; then
-            if [[ "$DRY_RUN" == true ]]; then
-                _yellow "  [DRY-RUN] Would wipe existing: $target_dir"
+            if [[ "$RESUME" == true ]]; then
+                if [[ "$DRY_RUN" == true ]]; then
+                    _yellow "  [DRY-RUN] Would keep existing (resume mode): $target_dir"
+                else
+                    _gray "  Resume mode: keeping existing directory: $target_dir"
+                fi
             else
-                _gray "  Cleaning previous run: $target_dir"
-                rm -rf "$target_dir"
+                if [[ "$DRY_RUN" == true ]]; then
+                    _yellow "  [DRY-RUN] Would wipe existing: $target_dir"
+                else
+                    _gray "  Cleaning previous run: $target_dir"
+                    rm -rf "$target_dir"
+                fi
             fi
         fi
         mkdir -p "$target_dir"
@@ -301,8 +362,12 @@ FENCE
             cat > "$PROMPT_TMP" <<PROMPT
 Generate a complete, working ${lang_label} project based on the following PRD.
 
-Create all necessary files, configuration, and folder structure.
+Create all necessary source files, configuration files, and folder structure
+inside the current working directory.
+
 Include a README.md with setup and run instructions.
+When the project is fully complete, create a file named ${FINISHED_FLAG} in the
+current working directory. Only create this file after all required project files are done.
 
 PRD:
 ---
@@ -318,15 +383,25 @@ PROMPT
 You are operating with the securable-claude-plugin active (CLAUDE.md and
 .claude/commands/ are present in this directory).
 
-Apply the following /secure-generate instructions as your primary constraints:
+The following securability engineering instructions are your primary
+constraints — treat them as non-negotiable design requirements.
 
+=== SECURABLE-CLAUDE-PLUGIN INSTRUCTIONS ===
 ${SECURE_INSTRUCTIONS}
+=== END PLUGIN INSTRUCTIONS ===
 
 Now generate a complete, working ${lang_label} project based on the following PRD,
-ensuring all FIASSE/SSEM securability attributes are applied throughout.
+applying every FIASSE/SSEM constraint above throughout all generated code.
 
-Create all necessary files, configuration, and folder structure.
-Include a README.md with setup, run instructions, and a brief SSEM score summary.
+Create all necessary source files, configuration files, and folder structure
+inside the current working directory.
+
+Include a README.md with:
+  - Setup and run instructions
+  - A brief SSEM attribute coverage summary describing how each of the nine
+    attributes is addressed in the generated code
+When the project is fully complete, create a file named ${FINISHED_FLAG} in the
+current working directory. Only create this file after all required project files are done.
 
 PRD:
 ---

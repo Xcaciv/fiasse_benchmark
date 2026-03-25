@@ -187,8 +187,7 @@ function Invoke-CopilotAgent {
             $previousErrorActionPreference = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                & copilot @copilotArgs 2>&1 |
-                    Tee-Object -FilePath $logFile
+                copilot @copilotArgs 2>&1 | Tee-Object -FilePath $logFile
             }
             finally {
                 $ErrorActionPreference = $previousErrorActionPreference

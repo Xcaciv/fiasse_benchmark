@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run-codegen-copilot-claude-plugin.sh
+# run-codegen-opencode.sh
 #
-# Automates GitHub Copilot CLI to generate a project from a PRD in 3 languages,
-# each with a "rawdog" (plain) and "securable" (FIASSE plugin) variant.
+# Automates OpenCode CLI to generate a project from a PRD in 3 languages,
+# each with a "rawdog" (plain) and "securable" (FIASSE module) variant.
 #
-# Uses the securable-claude-plugin for the securable runs.  Copilot CLI's skill
-# discovery path includes <project>/.claude/skills/, so the Claude plugin layout
-# is natively compatible with Copilot CLI — no adapter needed.
+# Uses the securable-opencode-module for the securable runs. The module is
+# copied into .securable/ in each target directory, and an opencode.json is
+# written at the project root to configure the MCP server and instructions.
+# OpenCode discovers the MCP tools and instructions automatically.
+#
+# OpenCode invocation:
+#   opencode run -f <prompt-file>
+#   (run mode suppresses the interactive TUI; the agent writes files directly
+#   into the current working directory)
 #
 # Output structure:
 #   <output-dir>/
 #     aspnet/
-#       rawdog/     <- Plain Copilot generation
-#       securable/  <- Generation with securable-claude-plugin active
+#       rawdog/     <- Plain OpenCode generation
+#       securable/  <- Generation with securable-opencode-module active
 #     jsp/
 #       rawdog/
 #       securable/
@@ -22,31 +28,26 @@
 #       securable/
 #
 # Usage:
-#   ./run-codegen-copilot-claude-plugin.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume]
-#   ./run-codegen-copilot-claude-plugin.sh --clean [--output-dir <dir>]
+#   ./run-codegen-opencode.sh --prd <file> [--output-dir <dir>] [--plugin-repo <url>] [--dry-run] [--resume]
+#   ./run-codegen-opencode.sh --clean [--output-dir <dir>]
 #
 # Options:
 #   --prd          Path to your PRD markdown or text file (required unless --clean)
-#   --output-dir   Root folder for generated output (default: ./copilot-codegen-output)
-#   --plugin-repo  Git URL of the securable-claude-plugin (default: canonical repo)
-#   --dry-run      Print what would run without calling Copilot CLI
+#   --output-dir   Root folder for generated output (default: ./opencode-codegen-output)
+#   --plugin-repo  Git URL of the securable-opencode-module (default: canonical repo)
+#   --dry-run      Print what would run without calling OpenCode
 #   --resume       Skip completed variations and preserve existing directories
-#   --clean        Remove cached plugin clone and finished flags, then exit
+#   --clean        Remove cached module clone and finished flags, then exit
 #   -h, --help     Show this help text
 #
 # Requirements:
-#   - bash 4+, git, copilot (GitHub Copilot CLI), tee, mktemp
+#   - bash 4+, git, opencode, python (3.10+ for MCP server), tee, mktemp
 #
 # Examples:
-#   ./run-codegen-copilot-claude-plugin.sh --prd ./my-prd.md
-#   ./run-codegen-copilot-claude-plugin.sh --prd ./my-prd.md --output-dir ~/tests/copilot --dry-run
-#   ./run-codegen-copilot-claude-plugin.sh --prd ./my-prd.md --resume
-#   ./run-codegen-copilot-claude-plugin.sh --clean --output-dir ~/tests/copilot
-#
-# NOTE — Copilot CLI flag compatibility:
-#   This script uses `copilot agent run --prompt-file <file> --yes`.
-#   If your version of the CLI uses a different flag name, update the
-#   invoke_copilot() function below.  Check with `copilot agent run --help`.
+#   ./run-codegen-opencode.sh --prd ./my-prd.md
+#   ./run-codegen-opencode.sh --prd ./my-prd.md --output-dir ~/tests/opencode --dry-run
+#   ./run-codegen-opencode.sh --prd ./my-prd.md --resume
+#   ./run-codegen-opencode.sh --clean --output-dir ~/tests/opencode
 # =============================================================================
 
 set -euo pipefail
@@ -67,8 +68,8 @@ write_step() { echo; _cyan ">>> $*"; }
 # Defaults
 # -----------------------------------------------------------------------------
 PRD_FILE=""
-OUTPUT_DIR="./copilot-codegen-output"
-PLUGIN_REPO="https://github.com/Xcaciv/securable-claude-plugin.git"
+OUTPUT_DIR="./opencode-codegen-output"
+PLUGIN_REPO="https://github.com/Xcaciv/securable-opencode-module.git"
 DRY_RUN=false
 RESUME=false
 CLEAN=false
@@ -117,12 +118,12 @@ OUTPUT_DIR="$(realpath -m "$OUTPUT_DIR")"
 if [[ "$CLEAN" == true ]]; then
     _magenta ">>> Cleaning cache files from $OUTPUT_DIR"
 
-    PLUGIN_TEMP="$OUTPUT_DIR/_securable_claude_plugin_temp"
+    PLUGIN_TEMP="$OUTPUT_DIR/_securable_opencode_temp"
     if [[ -d "$PLUGIN_TEMP" ]]; then
-        _yellow "  Removing plugin cache: $PLUGIN_TEMP"
+        _yellow "  Removing module cache: $PLUGIN_TEMP"
         rm -rf "$PLUGIN_TEMP"
     else
-        _gray "  Plugin cache not found (already clean)"
+        _gray "  Module cache not found (already clean)"
     fi
 
     flags_removed=0
@@ -164,50 +165,87 @@ assert_tool() {
 }
 
 # -----------------------------------------------------------------------------
-# install_plugin  <plugin-source-dir>  <target-dir>
+# install_module  <module-source-dir>  <target-dir>
 #
-# Copies .claude/, CLAUDE.md, skills/, and data/ into the target directory.
-# Copilot CLI's skill discovery includes <project>/.claude/skills/ (position 3
-# in its resolution order), making this plugin layout natively compatible.
+# Copies the securable-opencode-module into .securable/ in the target
+# directory, and writes an opencode.json at the target root to configure
+# the MCP server, instructions, and permissions.
+#
+# Module layout in target:
+#   .securable/instructions.md
+#   .securable/tools/mcp_server.py
+#   .securable/workflows/
+#   .securable/data/fiasse/
+#   .securable/data/asvs/
+#   .securable/templates/
+#   .securable/scripts/
+#   opencode.json  (MCP server config + permissions)
 # -----------------------------------------------------------------------------
-install_plugin() {
+install_module() {
     local src="$1"
     local dst="$2"
+    local dst_securable="$dst/.securable"
 
-    for asset in ".claude" "skills" "data"; do
-        if [[ -d "$src/$asset" ]]; then
-            cp -r "$src/$asset" "$dst/"
-            _gray "  Installed $asset/ -> $dst/$asset"
+    mkdir -p "$dst_securable"
+
+    # Copy module directories
+    for asset_dir in tools workflows data templates scripts; do
+        if [[ -d "$src/$asset_dir" ]]; then
+            cp -r "$src/$asset_dir" "$dst_securable/"
+            _gray "  Installed $asset_dir/ -> $dst_securable/$asset_dir"
         fi
     done
 
-    if [[ -f "$src/CLAUDE.md" ]]; then
-        cp "$src/CLAUDE.md" "$dst/CLAUDE.md"
-        _gray "  Installed CLAUDE.md -> $dst/CLAUDE.md"
+    # Copy module files
+    if [[ -f "$src/instructions.md" ]]; then
+        cp "$src/instructions.md" "$dst_securable/instructions.md"
+        _gray "  Installed instructions.md -> $dst_securable/instructions.md"
     fi
+
+    # Write opencode.json at target root with MCP server config and permissions
+    cat > "$dst/opencode.json" <<'OCJSON'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcpServers": {
+    "securable": {
+      "command": "python",
+      "args": ["./.securable/tools/mcp_server.py"],
+      "env": {
+        "SECURABLE_DATA_DIR": "./.securable/data",
+        "SECURABLE_TEMPLATES_DIR": "./.securable/templates",
+        "SECURABLE_WORKFLOWS_DIR": "./.securable/workflows"
+      }
+    }
+  },
+  "instructions": "./.securable/instructions.md",
+  "permission": {
+    "edit": "allow",
+    "bash": "allow"
+  }
+}
+OCJSON
+    _gray "  Wrote opencode.json -> $dst/opencode.json"
 }
 
 # -----------------------------------------------------------------------------
-# get_secure_instructions  <plugin-source-dir>
+# get_secure_instructions  <module-source-dir>
 #
-# Reads CLAUDE.md and the /secure-generate command definition, printing them
-# to stdout for inline embedding in the prompt.  Belt-and-suspenders: ensures
-# the constraints are present even in headless (--yes) mode where the CLI may
-# not auto-load project context files.
+# Reads instructions.md and the review workflow from the module, printing them
+# to stdout for inline embedding in the prompt.
 # -----------------------------------------------------------------------------
 get_secure_instructions() {
     local src="$1"
-    local claude_md="$src/CLAUDE.md"
-    local cmd_file="$src/.claude/commands/secure-generate.md"
+    local instr_file="$src/instructions.md"
+    local review_file="$src/workflows/securability-engineering-review.md"
     local output=""
 
-    if [[ -f "$claude_md" ]]; then
-        output+="$(cat "$claude_md")"$'\n\n'
+    if [[ -f "$instr_file" ]]; then
+        output+="$(cat "$instr_file")"$'\n\n'
     fi
 
-    if [[ -f "$cmd_file" ]]; then
-        output+="---"$'\n'"# /secure-generate command definition"$'\n'
-        output+="$(cat "$cmd_file")"$'\n'
+    if [[ -f "$review_file" ]]; then
+        output+="---"$'\n'"# Securability Engineering Review Workflow"$'\n'
+        output+="$(cat "$review_file")"$'\n'
     fi
 
     if [[ -n "$output" ]]; then
@@ -215,7 +253,7 @@ get_secure_instructions() {
         return
     fi
 
-    # Fallback if repo layout differs
+    # Fallback if module files not found
     cat <<'FALLBACK'
 Apply FIASSE/SSEM securability engineering principles as hard constraints.
 Satisfy all nine SSEM attributes:
@@ -229,20 +267,47 @@ FALLBACK
 }
 
 # -----------------------------------------------------------------------------
-# invoke_copilot  <working-dir>  <prompt-file>  <label>
+# set_opencode_permissions  <target-dir>
 #
-# Runs `copilot agent run --prompt-file <file> --yes` in the given directory.
-# The agent writes generated files directly into the working directory.
-# Output is tee'd to copilot-output.log.
-#
-# If your version of the Copilot CLI uses a different flag for supplying the
-# prompt, update the copilot invocation line below.
+# Writes or merges permission config into opencode.json at the target root.
+# Also sets the OPENCODE_PERMISSION env var at invocation time (done in
+# invoke_opencode).
 # -----------------------------------------------------------------------------
-invoke_copilot() {
+set_opencode_permissions() {
+    local target_dir="$1"
+    local config_path="$target_dir/opencode.json"
+
+    if [[ ! -f "$config_path" ]]; then
+        cat > "$config_path" <<'OCJSON'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "edit": "allow",
+    "bash": "allow"
+  }
+}
+OCJSON
+    fi
+    # If it already exists (e.g. from install_module), permissions are
+    # already included in the template. No further action needed.
+}
+
+# -----------------------------------------------------------------------------
+# invoke_opencode  <working-dir>  <prompt-file>  <label>
+#
+# Runs `opencode run -f <prompt-file>` in the given directory.
+# The run subcommand suppresses the interactive TUI.
+# Output is tee'd to opencode-output.log.
+#
+# Write permissions are granted via:
+#   1. OPENCODE_PERMISSION env var (set for the subprocess)
+#   2. opencode.json permission config (written by set_opencode_permissions)
+# -----------------------------------------------------------------------------
+invoke_opencode() {
     local working_dir="$1"
     local prompt_file="$2"
     local label="$3"
-    local log_file="$working_dir/copilot-output.log"
+    local log_file="$working_dir/opencode-output.log"
 
     if [[ "$DRY_RUN" == true ]]; then
         _yellow "  [DRY-RUN] Would run in: $working_dir"
@@ -250,25 +315,23 @@ invoke_copilot() {
         return
     fi
 
-    write_step "Running Copilot CLI for: $label"
+    write_step "Running OpenCode for: $label"
     _gray "  Output dir : $working_dir"
     _gray "  Log file   : $log_file"
 
     (
         cd "$working_dir"
-        local copilot_args=("agent" "run" "--prompt-file" "$prompt_file" "--yes")
-        if [[ "$RESUME" == true ]]; then
-            copilot_args+=("--resume")
-        fi
-        copilot "${copilot_args[@]}" 2>&1 | tee "$log_file"
-    ) || _yellow "  WARNING: copilot agent run exited non-zero for $label — check $log_file"
+        # Set permission env var for the subprocess
+        export OPENCODE_PERMISSION='{"edit": "allow", "bash": "allow"}'
+        opencode run -f "$prompt_file" 2>&1 | tee "$log_file"
+    ) || _yellow "  WARNING: opencode run exited non-zero for $label — check $log_file"
 }
 
 # =============================================================================
 # MAIN
 # =============================================================================
 
-_magenta ">>> Starting Copilot CLI codegen run (securable-claude-plugin)"
+_magenta ">>> Starting OpenCode codegen run"
 _gray "  PRD file   : $PRD_FILE"
 _gray "  Output dir : $OUTPUT_DIR"
 _gray "  Dry run    : $DRY_RUN"
@@ -276,8 +339,9 @@ _gray "  Resume     : $RESUME"
 
 write_step "Checking prerequisites ..."
 if [[ "$DRY_RUN" == false ]]; then
-    assert_tool "copilot"
+    assert_tool "opencode"
     assert_tool "git"
+    assert_tool "python"
 else
     _yellow "  [DRY-RUN] Skipping tool checks"
 fi
@@ -287,21 +351,25 @@ PRD_CONTENT="$(cat "$PRD_FILE")"
 mkdir -p "$OUTPUT_DIR"
 
 # ---------------------------------------------------------------------------
-# Step 1 — Clone the plugin once
+# Step 1 — Clone the module once
 # ---------------------------------------------------------------------------
-PLUGIN_TEMP="$OUTPUT_DIR/_securable_claude_plugin_temp"
+PLUGIN_TEMP="$OUTPUT_DIR/_securable_opencode_temp"
 
 if [[ -d "$PLUGIN_TEMP" ]]; then
-    write_step "Plugin already cloned at $PLUGIN_TEMP — skipping clone"
+    write_step "Module already cloned at $PLUGIN_TEMP — skipping clone"
 else
-    write_step "Cloning securable-claude-plugin ..."
+    write_step "Cloning securable-opencode-module ..."
     if [[ "$DRY_RUN" == true ]]; then
         _yellow "  [DRY-RUN] git clone $PLUGIN_REPO $PLUGIN_TEMP"
-        mkdir -p "$PLUGIN_TEMP/.claude/commands"
-        mkdir -p "$PLUGIN_TEMP/skills"
-        mkdir -p "$PLUGIN_TEMP/data"
-        echo "# securable-claude-plugin stub (dry-run)"    > "$PLUGIN_TEMP/CLAUDE.md"
-        echo "# secure-generate stub (dry-run)"            > "$PLUGIN_TEMP/.claude/commands/secure-generate.md"
+        # Create stub structure for dry-run
+        mkdir -p "$PLUGIN_TEMP/tools"
+        mkdir -p "$PLUGIN_TEMP/workflows"
+        mkdir -p "$PLUGIN_TEMP/data/fiasse"
+        mkdir -p "$PLUGIN_TEMP/data/asvs"
+        mkdir -p "$PLUGIN_TEMP/templates"
+        mkdir -p "$PLUGIN_TEMP/scripts"
+        echo "# securable-opencode-module stub (dry-run)" > "$PLUGIN_TEMP/instructions.md"
+        echo "{}" > "$PLUGIN_TEMP/opencode.json"
     else
         git clone "$PLUGIN_REPO" "$PLUGIN_TEMP"
     fi
@@ -312,7 +380,7 @@ SECURE_INSTRUCTIONS="$(get_secure_instructions "$PLUGIN_TEMP")"
 # ---------------------------------------------------------------------------
 # Step 2 — Loop over languages × modes
 # ---------------------------------------------------------------------------
-PROMPT_TMP="$(mktemp /tmp/copilot_prompt_XXXXXX.txt)"
+PROMPT_TMP="$(mktemp /tmp/opencode_prompt_XXXXXX.txt)"
 trap 'rm -f "$PROMPT_TMP"' EXIT
 
 for lang_key in "${LANG_KEYS[@]}"; do
@@ -356,13 +424,13 @@ for lang_key in "${LANG_KEYS[@]}"; do
         mkdir -p "$target_dir"
 
         # ------------------------------------------------------------------
-        # Isolation: install an empty CLAUDE.md into rawdog directories as a
-        # context fence.  Both Claude Code and Copilot CLI stop their upward
-        # directory walk when they find a CLAUDE.md, so this prevents plugin
-        # files in any parent directory from bleeding into the plain run.
+        # Isolation: place a minimal AGENTS.md in rawdog directories as a
+        # context fence. OpenCode uses AGENTS.md as the project context file,
+        # so placing one here prevents it from walking up the directory tree
+        # and loading module files from parent directories.
         # ------------------------------------------------------------------
         if [[ "$mode" == "rawdog" ]]; then
-            cat > "$target_dir/CLAUDE.md" <<'FENCE'
+            cat > "$target_dir/AGENTS.md" <<'FENCE'
 # codegen-test: rawdog baseline
 # This file exists only to prevent context from parent directories
 # being loaded into this isolated test run.  Do not add instructions here.
@@ -387,18 +455,20 @@ ${PRD_CONTENT}
 PROMPT
 
         else
-            install_plugin "$PLUGIN_TEMP" "$target_dir"
+            # Install module files so OpenCode auto-loads MCP server
+            install_module "$PLUGIN_TEMP" "$target_dir"
 
             cat > "$PROMPT_TMP" <<PROMPT
-You are operating with the securable-claude-plugin active (CLAUDE.md and
-.claude/commands/ are present in this directory).
+You are operating with the securable-opencode-module active (.securable/ directory
+and opencode.json are present in this directory). The MCP tools securability_review,
+secure_generate, and fiasse_lookup are available.
 
 The following securability engineering instructions are your primary
 constraints — treat them as non-negotiable design requirements.
 
-=== SECURABLE-CLAUDE-PLUGIN INSTRUCTIONS ===
+=== SECURABLE-OPENCODE-MODULE INSTRUCTIONS ===
 ${SECURE_INSTRUCTIONS}
-=== END PLUGIN INSTRUCTIONS ===
+=== END MODULE INSTRUCTIONS ===
 
 Now generate a complete, working ${lang_label} project based on the following PRD,
 applying every FIASSE/SSEM constraint above throughout all generated code.
@@ -420,7 +490,12 @@ ${PRD_CONTENT}
 PROMPT
         fi
 
-        invoke_copilot "$target_dir" "$PROMPT_TMP" "$lang_key / $mode"
+        # Ensure OpenCode has write permissions
+        if [[ "$DRY_RUN" == false ]]; then
+            set_opencode_permissions "$target_dir"
+        fi
+
+        invoke_opencode "$target_dir" "$PROMPT_TMP" "$lang_key / $mode"
     done
 done
 
@@ -432,18 +507,14 @@ echo
 _cyan "Generated folder structure:"
 for lang_key in "${LANG_KEYS[@]}"; do
     _cyan "  $OUTPUT_DIR/$lang_key/"
-    _gray "    rawdog/     <- plain Copilot generation"
+    _gray "    rawdog/     <- plain OpenCode generation"
     _gray "    securable/  <- FIASSE/SSEM secured generation"
 done
 echo
-_gray "Each folder contains a copilot-output.log with the full CLI response."
-echo
-_yellow "NOTE: If 'copilot agent run --prompt-file' is not recognised by your"
-_yellow "      version of the CLI, check 'copilot agent run --help' and update"
-_yellow "      the invoke_copilot() function in this script accordingly."
+_gray "Each folder contains an opencode-output.log with the full CLI response."
 
 if [[ "$DRY_RUN" == true ]]; then
     echo
-    _yellow "[DRY-RUN MODE] No Copilot calls were made."
+    _yellow "[DRY-RUN MODE] No OpenCode calls were made."
     _yellow "Remove --dry-run to execute for real."
 fi
