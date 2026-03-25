@@ -325,6 +325,10 @@ foreach ($langKey in $Languages.Keys) {
 
         New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
+        # NOTE: No CLAUDE.md context fence is needed for rawdog directories here.
+        # The securable-copilot plugin uses .github/ layout (not CLAUDE.md), so
+        # there is no risk of upward directory context loading from parent dirs.
+
         if ($mode -eq "rawdog") {
             $prompt = @(
                 "Generate a complete, working $langLabel project based on the following PRD.",

@@ -1,0 +1,318 @@
+# run-codegen Script — Product Requirements Document
+
+> Canonical specification for the `run-codegen-*` family of scripts.
+> Implementations exist (or should exist) for every `[shell]` × `[llm_cli_tool]` × `[plugin_type]` combination listed below.
+
+---
+
+## 1. Purpose
+
+Automate an LLM-powered CLI tool to generate a complete project from a PRD file in multiple programming languages, each produced in two variants:
+
+| Variant | Description |
+|---------|-------------|
+| **rawdog** | Plain generation — no security plugin, no FIASSE constraints. |
+| **securable** | Generation with the `[securable_plugin]` active, enforcing FIASSE/SSEM securability attributes. |
+
+The scripts exist to enable reproducible, side-by-side comparison of plain vs. security-enhanced code generation across languages and LLM CLI tools.
+
+---
+
+## 2. Placeholder Reference
+
+Scripts are parameterised by the following variable dimensions. Implementations replace each placeholder with a concrete value.
+
+| Placeholder | Description | Known Values |
+|---|---|---|
+| `[llm_cli_tool]` | The LLM CLI executable name | `claude`, `copilot` |
+| `[llm_cli_tool_label]` | Human-readable name for status messages | `Claude Code`, `GitHub Copilot CLI` |
+| `[shell]` | Script language / shell | `PowerShell`, `bash` |
+| `[securable_plugin]` | The security plugin used for "securable" runs | `securable-claude-plugin`, `securable-copilot` |
+| `[plugin_repo_url]` | Git clone URL for the plugin | `https://github.com/Xcaciv/securable-claude-plugin.git`, `https://github.com/Xcaciv/securable-copilot.git` |
+| `[plugin_temp_dir_name]` | Subfolder name for the cached plugin clone | `_plugin_temp`, `_securable_claude_plugin_temp`, `_securable_copilot_temp` |
+| `[default_output_dir]` | Default root output folder | `./codegen-output`, `./copilot-codegen-output` |
+| `[output_log_filename]` | Per-variation log file name | `claude-output.log`, `copilot-output.log` |
+| `[context_fence_file]` | File placed in rawdog dirs to stop upward context loading | `CLAUDE.md` |
+| `[finished_flag_file]` | Sentinel file marking a variation as complete | `.codegen-finished` |
+
+---
+
+## 3. Output Folder Structure
+
+All implementations MUST produce the following directory layout under `[default_output_dir]`:
+
+```
+[default_output_dir]/
+├── [plugin_temp_dir_name]/    # Cached clone of [securable_plugin] (transient)
+├── aspnet/
+│   ├── rawdog/                # Plain [llm_cli_tool] generation
+│   │   ├── [context_fence_file]
+│   │   ├── [output_log_filename]
+│   │   ├── [finished_flag_file]
+│   │   └── <generated project files...>
+│   └── securable/             # [securable_plugin]-enhanced generation
+│       ├── [output_log_filename]
+│       ├── [finished_flag_file]
+│       └── <generated project files + plugin assets...>
+├── jsp/
+│   ├── rawdog/
+│   └── securable/
+└── node/
+    ├── rawdog/
+    └── securable/
+```
+
+---
+
+## 4. Parameters / Options
+
+All implementations MUST accept the following parameters. The flag syntax is shell-appropriate (`-PrdFile` / `--prd`, etc.).
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `PrdFile` / `--prd` | Yes (except with `Clean`) | — | Path to the PRD markdown or text file to feed to the LLM. |
+| `OutputDir` / `--output-dir` | No | `[default_output_dir]` | Root folder for all generated output. |
+| `PluginRepo` / `--plugin-repo` | No | `[plugin_repo_url]` | Git URL of the `[securable_plugin]` repository. |
+| `DryRun` / `--dry-run` | No | `false` | Print what would run without invoking `[llm_cli_tool]`. Creates stub plugin structures so the full flow can be traced. |
+| `Resume` / `--resume` | No | `false` | Preserve existing output directories and skip variations that have a `[finished_flag_file]`. Useful when token limits or rate limits interrupt a run. |
+| `Clean` / `--clean` | No | `false` | Remove the cached plugin clone (`[plugin_temp_dir_name]`) and all `[finished_flag_file]` flags from the output directory, then exit. No generation is performed. `PrdFile` is NOT required when `Clean` is active. |
+
+### Parameter Interactions
+
+- `Resume` and `Clean` are mutually exclusive with normal generation semantics:
+  - `Clean` exits immediately after cleanup — no other work is performed.
+  - `Resume` only skips variations where `[finished_flag_file]` exists; all other variations proceed normally (preserving existing content rather than wiping).
+- Without `Resume`, existing target directories are **wiped and recreated** before generation.
+- Without `Resume`, the `[finished_flag_file]` is **ignored** — completed variations are re-run.
+
+---
+
+## 5. Language Definitions
+
+All implementations MUST use the same set of target languages and labels:
+
+| Key | Label (used in prompts) |
+|---|---|
+| `aspnet` | ASP.NET Core (C#) Web API / MVC application |
+| `jsp` | Java web application using JSP (Java Server Pages) and servlets |
+| `node` | Node.js web application using Express.js |
+
+---
+
+## 6. Execution Flow
+
+### 6.1 Clean Mode (early exit)
+
+When `Clean` is specified:
+
+1. Resolve `OutputDir` to an absolute path.
+2. If `[plugin_temp_dir_name]` exists under `OutputDir`, remove it recursively.
+3. Recursively find and delete all `[finished_flag_file]` files under `OutputDir`.
+4. Print a summary of what was removed.
+5. Exit — no generation is performed.
+
+### 6.2 Normal Mode
+
+#### Step 0 — Initialisation
+
+1. Resolve `PrdFile` and `OutputDir` to absolute paths.
+2. Print a status banner showing all parameters.
+3. Read the PRD file content into memory once.
+4. Create the root `OutputDir` if it does not exist.
+
+#### Step 1 — Prerequisite Check
+
+1. Verify `[llm_cli_tool]` is on PATH (skip in `DryRun` mode).
+2. Verify `git` is on PATH (skip in `DryRun` mode).
+3. If a required tool is missing, terminate with a clear error message.
+
+#### Step 2 — Clone the Plugin
+
+1. Target directory: `OutputDir/[plugin_temp_dir_name]`.
+2. If the directory already exists, skip cloning (print a notice).
+3. Otherwise, run `git clone [plugin_repo_url] [plugin_temp_dir_name]`.
+4. In `DryRun` mode: create a minimal stub directory structure so later steps can reference plugin files.
+5. Read the securable instructions from the cloned plugin into a variable for prompt embedding.
+
+#### Step 3 — Generate per Language × Mode
+
+For each language key (`aspnet`, `jsp`, `node`) and each mode (`rawdog`, `securable`):
+
+##### 3a. Resume / Skip Check
+
+- If `Resume` is active **and** `[finished_flag_file]` exists in the target directory → skip this variation.
+- Otherwise, proceed.
+
+##### 3b. Directory Preparation
+
+- **Without `Resume`**: If the target directory exists, remove it recursively, then recreate it.
+- **With `Resume`**: If the target directory exists, keep it as-is.
+- Ensure the target directory exists.
+
+##### 3c. Context Isolation (rawdog only)
+
+- Write a minimal `[context_fence_file]` into the rawdog target directory.
+- Purpose: prevents `[llm_cli_tool]` from walking up the directory tree and loading plugin files from parent directories.
+- Content:
+  ```
+  # codegen-test: rawdog baseline
+  # This file exists only to prevent context from parent directories
+  # being loaded into this isolated test run.  Do not add instructions here.
+  ```
+
+##### 3d. Plugin Installation (securable only)
+
+- Copy plugin assets from the cached clone into the target directory.
+- Assets vary by `[securable_plugin]`:
+
+  | Plugin | Assets Copied |
+  |---|---|
+  | `securable-claude-plugin` | `.claude/`, `skills/`, `data/`, `CLAUDE.md` |
+  | `securable-copilot` | `.github/` (includes `prompts/`, `agents/`, `copilot-instructions.md`) |
+
+##### 3e. Prompt Construction
+
+**Rawdog prompt** (all tools):
+```
+Generate a complete, working [lang_label] project based on the following PRD.
+
+Create all necessary source files, configuration files, and folder structure
+inside the current working directory.
+
+Include a README.md with setup and run instructions.
+When the project is fully complete, create a file named [finished_flag_file] in the
+current working directory. Only create this file after all required project files are done.
+
+PRD:
+---
+<prd_content>
+---
+```
+
+**Securable prompt** (all tools):
+```
+You are operating with the [securable_plugin] active ([context_files] are
+present in this directory).
+
+The following securability engineering instructions are your primary
+constraints — treat them as non-negotiable design requirements.
+
+=== [SECURABLE_PLUGIN] INSTRUCTIONS ===
+<embedded_plugin_instructions>
+=== END PLUGIN INSTRUCTIONS ===
+
+Now generate a complete, working [lang_label] project based on the following PRD,
+applying every FIASSE/SSEM constraint above throughout all generated code.
+
+Create all necessary source files, configuration files, and folder structure
+inside the current working directory.
+
+Include a README.md with:
+  - Setup and run instructions
+  - A brief SSEM attribute coverage summary describing how each of the nine
+    attributes is addressed in the generated code
+When the project is fully complete, create a file named [finished_flag_file] in the
+current working directory. Only create this file after all required project files are done.
+
+PRD:
+---
+<prd_content>
+---
+```
+
+##### 3f. Securable Instruction Extraction
+
+The embedded instructions are read from the plugin clone. Sources vary by plugin:
+
+| Plugin | Primary Source | Additional Sources |
+|---|---|---|
+| `securable-claude-plugin` | `CLAUDE.md` | `.claude/commands/secure-generate.md` |
+| `securable-copilot` | `.github/copilot-instructions.md` | `.github/prompts/input-handling.prompt.md`, `.github/prompts/security-requirements.prompt.md` |
+
+A hardcoded fallback MUST exist for when the plugin files are not found:
+```
+Apply FIASSE/SSEM securability engineering principles as hard constraints.
+Satisfy all nine SSEM attributes:
+  Maintainability: Analyzability, Modifiability, Testability
+  Trustworthiness: Confidentiality, Accountability, Authenticity
+  Reliability:     Availability, Integrity, Resilience
+Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all
+trust boundaries. Enforce the Derived Integrity Principle for business-critical
+values. Produce structured audit logging for all accountable actions.
+```
+
+##### 3g. Write Permissions Configuration
+
+Before invoking `[llm_cli_tool]`, configure write permissions so the tool can write to the target directory without interactive prompts:
+
+| Tool | Mechanism |
+|---|---|
+| `claude` | Write `.claude/claude.json` with `allowed_write_directories` pointing to the target dir |
+| `copilot` | Write `.claude/claude.json` with `allowed_write_directories` listing all target dirs; pass `--add-dir` on invocation |
+
+##### 3h. LLM CLI Invocation
+
+Invoke `[llm_cli_tool]` non-interactively in the target directory. The tool writes generated files directly into the working directory.
+
+| Tool | Invocation Pattern | Permission Bypass | Prompt Delivery |
+|---|---|---|---|
+| `claude` | `claude --print --permission-mode bypassPermissions` | `--permission-mode bypassPermissions` | Piped via stdin |
+| `copilot` | `copilot -p <prompt-file> --allow-all-tools --add-dir <dir> --allow-all-urls --no-alt-screen` | `--allow-all-tools`, `--allow-all-urls` | Written to a temp file, path passed via `-p` |
+| `copilot` (variant) | `copilot -p <prompt-file> --allow-tool=write --add-dir <dir> --allow-all-urls --no-alt-screen` | `--allow-tool=write`, `--allow-all-urls` | Written to a temp file, path passed via `-p` |
+
+- All output (stdout + stderr) MUST be captured to `[output_log_filename]` in the target directory via `tee` or equivalent.
+- Non-zero exit codes produce a **warning** (not a fatal error) so the loop continues to the next variation.
+- Temp prompt files (copilot only) MUST be cleaned up in a finally/trap block.
+- When `Resume` is active, pass `--resume` to copilot invocations.
+
+#### Step 4 — Summary
+
+Print a structured summary showing:
+1. The generated folder structure with annotations for each variant.
+2. Where to find log files.
+3. In `DryRun` mode: a clear notice that no LLM calls were made.
+
+---
+
+## 7. DryRun Behaviour
+
+When `DryRun` is active, the script MUST:
+
+- Skip prerequisite tool checks (print a notice instead).
+- Create stub plugin directory structures with placeholder files instead of running `git clone`.
+- Print each command that **would** run (working directory, prompt preview) without executing it.
+- Still exercise the full control flow (directory creation, prompt construction, iteration) so the operator can verify correctness.
+
+---
+
+## 8. Error Handling
+
+- Use strict mode (`Set-StrictMode -Version Latest` / `set -euo pipefail`).
+- Stop on errors by default (`$ErrorActionPreference = "Stop"` / `set -e`).
+- LLM CLI non-zero exit codes produce a **warning** and continue to the next variation (do not abort the entire run).
+- `git clone` failure is **fatal** — terminate immediately.
+- Missing required tools are **fatal** — terminate with a clear message.
+
+---
+
+## 9. Implementation Matrix
+
+| Shell | LLM Tool | Plugin | Script Name | Status |
+|---|---|---|---|---|
+| PowerShell | `claude` | `securable-claude-plugin` | `PowerShell/run-codegen-claude.ps1` | Implemented |
+| PowerShell | `copilot` | `securable-claude-plugin` | `PowerShell/run-codegen-copilot-claude-plugin.ps1` | Implemented |
+| PowerShell | `copilot` | `securable-copilot` | `PowerShell/run-codegen-copilot.ps1` | Implemented |
+| bash | `claude` | `securable-claude-plugin` | `bash/run-codegen-claude.sh` | Implemented (missing `Resume`, `Clean`, `[finished_flag_file]`) |
+| bash | `copilot` | `securable-claude-plugin` | `bash/run-codegen-copilot-claude-plugin.sh` | Implemented (missing `Resume`, `Clean`, `[finished_flag_file]`) |
+| bash | `copilot` | `securable-copilot` | `bash/run-codegen-copilot.sh` | Not yet created |
+
+---
+
+## 10. Known Gaps — Bash Scripts
+
+The existing bash scripts are missing the following features that are present in the PowerShell implementations:
+
+1. **`--resume` flag** — bash scripts always wipe and recreate target directories. They should support `--resume` to skip completed variations (where `[finished_flag_file]` exists) and preserve existing content.
+2. **`--clean` flag** — bash scripts have no cache cleanup mode. They should support `--clean` to remove `[plugin_temp_dir_name]` and all `[finished_flag_file]` flags, then exit.
+3. **`[finished_flag_file]` creation** — bash prompts do not instruct the LLM to create `[finished_flag_file]` upon completion. The prompt should include this instruction.
+4. **`bash/run-codegen-copilot.sh`** — no bash implementation exists for the `copilot` + `securable-copilot` combination.

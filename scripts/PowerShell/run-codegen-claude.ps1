@@ -87,6 +87,16 @@ function Write-Step([string]$Message, [string]$Color = "Cyan") {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: Verify required tools are present
+# ---------------------------------------------------------------------------
+function Assert-Tool([string]$Name) {
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        throw "Required tool '$Name' not found on PATH. Please install it and try again."
+    }
+    Write-Host "  [OK] $Name found: $((Get-Command $Name).Source)" -ForegroundColor DarkGreen
+}
+
+# ---------------------------------------------------------------------------
 # Helper: Run claude non-interactively in a given directory.
 #   Claude Code CLI: claude --print  (alias: claude -p)
 #   The prompt is passed via stdin to avoid command-line quoting issues.
@@ -185,17 +195,32 @@ function Install-SecurablePlugin {
 #   where slash commands may not be dispatched automatically.
 # ---------------------------------------------------------------------------
 function Get-SecureGenerateInstructions([string]$PluginSource) {
-    $cmdFile = Join-Path $PluginSource ".claude\commands\secure-generate.md"
-    if (Test-Path $cmdFile) {
-        return Get-Content $cmdFile -Raw
+    $parts = [System.Collections.Generic.List[string]]::new()
+
+    $claudeMd  = Join-Path $PluginSource "CLAUDE.md"
+    $secGenCmd = Join-Path $PluginSource ".claude\commands\secure-generate.md"
+
+    if (Test-Path $claudeMd) {
+        $parts.Add((Get-Content $claudeMd -Raw))
     }
-    # Fallback if file not found
+    if (Test-Path $secGenCmd) {
+        $parts.Add("---`n# /secure-generate command definition`n" + (Get-Content $secGenCmd -Raw))
+    }
+
+    if ($parts.Count -gt 0) {
+        return $parts -join "`n`n"
+    }
+
+    # Fallback if plugin files not found
     return @(
-        "Apply FIASSE/SSEM securability engineering principles as hard constraints",
-        "while generating the code. Ensure the output scores well across the nine",
-        "SSEM attributes: Analyzability, Modifiability, Testability, Confidentiality,",
-        "Accountability, Authenticity, Availability, Integrity, and Resilience.",
-        "Use the /secure-generate approach from the securable-claude-plugin."
+        "Apply FIASSE/SSEM securability engineering principles as hard constraints.",
+        "Satisfy all nine SSEM attributes:",
+        "  Maintainability: Analyzability, Modifiability, Testability",
+        "  Trustworthiness: Confidentiality, Accountability, Authenticity",
+        "  Reliability:     Availability, Integrity, Resilience",
+        "Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all",
+        "trust boundaries. Enforce the Derived Integrity Principle for business-critical",
+        "values. Produce structured audit logging for all accountable actions."
     ) -join "`n"
 }
 
@@ -241,6 +266,17 @@ Write-Host "  PRD file   : $PrdFile"
 Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
 Write-Host "  Resume     : $Resume"
+
+# ---------------------------------------------------------------------------
+# Prerequisite check
+# ---------------------------------------------------------------------------
+Write-Step "Checking prerequisites ..."
+if (-not $DryRun) {
+    Assert-Tool "claude"
+    Assert-Tool "git"
+} else {
+    Write-Host "  [DRY-RUN] Skipping tool checks" -ForegroundColor Yellow
+}
 
 # Read PRD
 $PrdContent = Get-Content $PrdFile -Raw
@@ -331,7 +367,9 @@ foreach ($langKey in $Languages.Keys) {
             $prompt = @(
                 "Generate a complete, working $langLabel project based on the following PRD.",
                 "",
-                "Create all necessary files, configuration, and folder structure.",
+                "Create all necessary source files, configuration files, and folder structure",
+                "inside the current working directory.",
+                "",
                 "Include a README.md with setup and run instructions.",
                 "When the project is fully complete, create a file named $FinishedFlagFileName in the",
                 "current working directory. Only create this file after all required project files are done.",
@@ -349,15 +387,23 @@ foreach ($langKey in $Languages.Keys) {
                 "You are operating with the securable-claude-plugin active (CLAUDE.md and",
                 ".claude/commands/ are present in this directory).",
                 "",
-                "Apply the following /secure-generate instructions as your primary constraints:",
+                "The following securability engineering instructions are your primary",
+                "constraints - treat them as non-negotiable design requirements.",
                 "",
+                "=== SECURABLE-CLAUDE-PLUGIN INSTRUCTIONS ===",
                 $SecureInstructions,
+                "=== END PLUGIN INSTRUCTIONS ===",
                 "",
                 "Now generate a complete, working $langLabel project based on the following PRD,",
-                "ensuring all FIASSE/SSEM securability attributes are applied throughout.",
+                "applying every FIASSE/SSEM constraint above throughout all generated code.",
                 "",
-                "Create all necessary files, configuration, and folder structure.",
-                "Include a README.md with setup, run instructions, and a brief SSEM score summary.",
+                "Create all necessary source files, configuration files, and folder structure",
+                "inside the current working directory.",
+                "",
+                "Include a README.md with:",
+                "  - Setup and run instructions",
+                "  - A brief SSEM attribute coverage summary describing how each of the nine",
+                "    attributes is addressed in the generated code",
                 "When the project is fully complete, create a file named $FinishedFlagFileName in the",
                 "current working directory. Only create this file after all required project files are done.",
                 "",
