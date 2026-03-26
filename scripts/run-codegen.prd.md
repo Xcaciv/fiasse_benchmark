@@ -75,6 +75,7 @@ All implementations MUST accept the following parameters. The flag syntax is she
 | `PluginRepo` / `--plugin-repo` | No | `[plugin_repo_url]` | Git URL of the `[securable_plugin]` repository. |
 | `DryRun` / `--dry-run` | No | `false` | Print what would run without invoking `[llm_cli_tool]`. Creates stub plugin structures so the full flow can be traced. |
 | `Resume` / `--resume` | No | `false` | Preserve existing output directories and skip variations that have a `[finished_flag_file]`. Useful when token limits or rate limits interrupt a run. |
+| `Modes` / `--modes` | No | `rawdog,securable` | One or more generation modes to execute. Accepts a list (e.g., `rawdog,securable` or repeated flags). Implementations MUST validate all requested modes and fail early if any mode is unsupported. Error text MUST include the list of available modes. |
 | `Clean` / `--clean` | No | `false` | Remove the cached plugin clone (`[plugin_temp_dir_name]`) and all `[finished_flag_file]` flags from the output directory, then exit. No generation is performed. `PrdFile` is NOT required when `Clean` is active. |
 
 ### Parameter Interactions
@@ -82,6 +83,8 @@ All implementations MUST accept the following parameters. The flag syntax is she
 - `Resume` and `Clean` are mutually exclusive with normal generation semantics:
   - `Clean` exits immediately after cleanup — no other work is performed.
   - `Resume` only skips variations where `[finished_flag_file]` exists; all other variations proceed normally (preserving existing content rather than wiping).
+- `Modes` accepts one or more values and defaults to the built-in baseline modes (`rawdog`, `securable`).
+- If any value in `Modes` is not in the implementation's supported mode list, the script MUST fail before generation starts and print both the invalid values and all available mode options.
 - Without `Resume`, existing target directories are **wiped and recreated** before generation.
 - Without `Resume`, the `[finished_flag_file]` is **ignored** — completed variations are re-run.
 
@@ -96,6 +99,19 @@ All implementations MUST use the same set of target languages and labels:
 | `aspnet` | ASP.NET Core (C#) Web API / MVC application |
 | `jsp` | Java web application using JSP (Java Server Pages) and servlets |
 | `node` | Node.js web application using Express.js |
+
+### 5.1 Mode Definitions
+
+Each implementation MUST maintain an explicit supported mode definition map/list and drive execution from that source.
+
+Minimum required built-in modes:
+
+| Mode | Required Behavior |
+|---|---|
+| `rawdog` | Plain generation with no security plugin constraints. |
+| `securable` | Generation with `[securable_plugin]` assets installed and securability constraints applied. |
+
+Future mode additions MUST only require adding a new mode definition and should not require rewriting the core execution loop structure.
 
 ---
 
@@ -136,7 +152,7 @@ When `Clean` is specified:
 
 #### Step 3 — Generate per Language × Mode
 
-For each language key (`aspnet`, `jsp`, `node`) and each mode (`rawdog`, `securable`):
+For each language key (`aspnet`, `jsp`, `node`) and each selected mode from `Modes`:
 
 ##### 3a. Resume / Skip Check
 

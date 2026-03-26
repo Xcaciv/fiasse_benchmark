@@ -52,6 +52,11 @@
     Resume a previous run without wiping existing target directories.
     Useful when token windows or rate limits interrupt generation.
 
+.PARAMETER Modes
+    One or more generation modes to run.
+    Defaults to both: rawdog,securable
+    The script validates all provided modes and fails early if any are unsupported.
+
 .PARAMETER Clean
     Remove the cached plugin clone and .codegen-finished flags from
     the output directory, then exit.  No generation is performed.
@@ -60,6 +65,7 @@
 .EXAMPLE
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md
     .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -OutputDir D:\tests\copilot -DryRun
+    .\run-codegen-copilot-claude-plugin.ps1 -PrdFile .\my-prd.md -Modes rawdog
     .\run-codegen-copilot-claude-plugin.ps1 -OutputDir D:\tests\copilot -Clean
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
@@ -76,6 +82,9 @@ param(
 
     [switch]$Resume,
 
+    [ValidateCount(1, 32)]
+    [string[]]$Modes = @("rawdog", "securable"),
+
     [Parameter(ParameterSetName = 'Clean')]
     [switch]$Clean
 )
@@ -91,6 +100,38 @@ $Languages = [ordered]@{
     "aspnet" = "ASP.NET Core (C#) Web API / MVC application"
     "jsp"    = "Java web application using JSP (Java Server Pages) and servlets"
     "node"   = "Node.js web application using Express.js"
+}
+
+$ModeDefinitions = [ordered]@{
+    "rawdog" = @{
+        IsSecurable  = $false
+        SummaryLabel = "plain Copilot generation"
+    }
+    "securable" = @{
+        IsSecurable  = $true
+        SummaryLabel = "FIASSE/SSEM secured generation"
+    }
+}
+
+$SupportedModes = @($ModeDefinitions.Keys)
+$NormalizedModes = [System.Collections.Generic.List[string]]::new()
+foreach ($modeArg in $Modes) {
+    foreach ($candidate in ($modeArg -split ",")) {
+        $normalized = $candidate.Trim().ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            $NormalizedModes.Add($normalized)
+        }
+    }
+}
+
+$Modes = @($NormalizedModes | Select-Object -Unique)
+if ($Modes.Count -eq 0) {
+    throw "At least one mode must be provided via -Modes. Available modes: $($SupportedModes -join ', ')"
+}
+
+$InvalidModes = @($Modes | Where-Object { $_ -notin $SupportedModes })
+if ($InvalidModes.Count -gt 0) {
+    throw "Unsupported mode(s): $($InvalidModes -join ', '). Available modes: $($SupportedModes -join ', ')"
 }
 
 $FinishedFlagFileName = ".codegen-finished"
@@ -331,6 +372,7 @@ Write-Host "  PRD file   : $PrdFile"
 Write-Host "  Output dir : $OutputDir"
 Write-Host "  Dry run    : $DryRun"
 Write-Host "  Resume     : $Resume"
+Write-Host "  Modes      : $($Modes -join ', ')"
 
 # ---------------------------------------------------------------------------
 # Prerequisite check
@@ -376,7 +418,7 @@ $SecurableInstructions = Get-SecurableInstructions $PluginTemp
 
 $AllTargetDirs = @()
 foreach ($lang in $Languages.Keys) {
-    foreach ($m in @("rawdog", "securable")) {
+    foreach ($m in $Modes) {
         $AllTargetDirs += (Join-Path $OutputDir "$lang\$m")
     }
 }
@@ -387,7 +429,9 @@ foreach ($lang in $Languages.Keys) {
 foreach ($langKey in $Languages.Keys) {
     $langLabel = $Languages[$langKey]
 
-    foreach ($mode in @("rawdog", "securable")) {
+    foreach ($mode in $Modes) {
+
+        $modeConfig = $ModeDefinitions[$mode]
 
         $targetDir = Join-Path $OutputDir "$langKey\$mode"
         $finishedFlagPath = Join-Path $targetDir $FinishedFlagFileName
@@ -425,7 +469,7 @@ foreach ($langKey in $Languages.Keys) {
         # fence. Both Claude Code and Copilot CLI stop their upward directory walk
         # when they find a CLAUDE.md, preventing plugin files in parent directories
         # from bleeding into the plain baseline run.
-        if ($mode -eq "rawdog") {
+        if (-not $modeConfig.IsSecurable) {
             $fenceContent = @(
                 "# codegen-test: rawdog baseline",
                 "# This file exists only to prevent context from parent directories",
@@ -435,7 +479,7 @@ foreach ($langKey in $Languages.Keys) {
         }
 
         # ---- Build the prompt ----
-        if ($mode -eq "rawdog") {
+        if (-not $modeConfig.IsSecurable) {
             $prompt = @(
                 "Generate a complete, working $langLabel project based on the following PRD.",
                 "",
@@ -505,8 +549,10 @@ Write-Host "Generated folder structure:" -ForegroundColor White
 foreach ($langKey in $Languages.Keys) {
     Write-Host "  $OutputDir\" -NoNewline -ForegroundColor Gray
     Write-Host "$langKey\" -ForegroundColor Cyan
-    Write-Host "    rawdog\     <- plain Copilot generation" -ForegroundColor Gray
-    Write-Host "    securable\  <- FIASSE/SSEM secured generation" -ForegroundColor Gray
+    foreach ($mode in $Modes) {
+        $summaryLabel = $ModeDefinitions[$mode].SummaryLabel
+        Write-Host "    $mode\  <- $summaryLabel" -ForegroundColor Gray
+    }
 }
 Write-Host ""
 Write-Host "Each folder contains a copilot-output.log with the full CLI response." -ForegroundColor DarkGray
