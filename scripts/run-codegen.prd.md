@@ -7,12 +7,13 @@
 
 ## 1. Purpose
 
-Automate an LLM-powered CLI tool to generate a complete project from a PRD file in multiple programming languages, each produced in two variants:
+Automate an LLM-powered CLI tool to generate a complete project from a PRD file in multiple programming languages, each produced in one of the supported variants:
 
 | Variant | Description |
 |---------|-------------|
 | **rawdog** | Plain generation — no security plugin, no FIASSE constraints. |
 | **securable** | Generation with the `[securable_plugin]` active, enforcing FIASSE/SSEM securability attributes. |
+| **fiassed** | Generation with the `[securable_plugin]` active plus a PRD enhancement step that applies FIASSE+ASVS guidance before code generation. |
 
 The scripts exist to enable reproducible, side-by-side comparison of plain vs. security-enhanced code generation across languages and LLM CLI tools.
 
@@ -50,16 +51,22 @@ All implementations MUST produce the following directory layout under `[default_
 │   │   ├── [output_log_filename]
 │   │   ├── [finished_flag_file]
 │   │   └── <generated project files...>
-│   └── securable/             # [securable_plugin]-enhanced generation
+│   ├── securable/             # [securable_plugin]-enhanced generation
+│       ├── [output_log_filename]
+│       ├── [finished_flag_file]
+│       └── <generated project files + plugin assets...>
+│   └── fiassed/               # securable + PRD enhancement play/workflow
 │       ├── [output_log_filename]
 │       ├── [finished_flag_file]
 │       └── <generated project files + plugin assets...>
 ├── jsp/
 │   ├── rawdog/
-│   └── securable/
+│   ├── securable/
+│   └── fiassed/
 └── node/
     ├── rawdog/
-    └── securable/
+    ├── securable/
+    └── fiassed/
 ```
 
 ---
@@ -75,7 +82,7 @@ All implementations MUST accept the following parameters. The flag syntax is she
 | `PluginRepo` / `--plugin-repo` | No | `[plugin_repo_url]` | Git URL of the `[securable_plugin]` repository. |
 | `DryRun` / `--dry-run` | No | `false` | Print what would run without invoking `[llm_cli_tool]`. Creates stub plugin structures so the full flow can be traced. |
 | `Resume` / `--resume` | No | `false` | Preserve existing output directories and skip variations that have a `[finished_flag_file]`. Useful when token limits or rate limits interrupt a run. |
-| `Modes` / `--modes` | No | `rawdog,securable` | One or more generation modes to execute. Accepts a list (e.g., `rawdog,securable` or repeated flags). Implementations MUST validate all requested modes and fail early if any mode is unsupported. Error text MUST include the list of available modes. |
+| `Modes` / `--modes` | No | `rawdog,securable` | One or more generation modes to execute. Accepts a list (e.g., `rawdog,securable` or repeated flags). Implementations MUST validate all requested modes and fail early if any mode is unsupported. Error text MUST include the list of available modes. Baseline supported modes are `rawdog` and `securable`; implementations may additionally support `fiassed` when enhancement assets are available for the selected plugin/tool pair. |
 | `Clean` / `--clean` | No | `false` | Remove the cached plugin clone (`[plugin_temp_dir_name]`) and all `[finished_flag_file]` flags from the output directory, then exit. No generation is performed. `PrdFile` is NOT required when `Clean` is active. |
 
 ### Parameter Interactions
@@ -110,6 +117,14 @@ Minimum required built-in modes:
 |---|---|
 | `rawdog` | Plain generation with no security plugin constraints. |
 | `securable` | Generation with `[securable_plugin]` assets installed and securability constraints applied. |
+| `fiassed` | Securable generation plus a pre-generation PRD enhancement operation run after plugin installation and before prompt construction. |
+
+`fiassed` mode requirements:
+
+- For `securable-claude-plugin`, the canonical play is `plays/requirements-analysis/prd-fiasse-asvs-enhancement.md`.
+- If the selected plugin/CLI does not use Claude-style plays, implementations MUST run the equivalent enhancement operation using that plugin's native assets/mechanism.
+- The enhancement operation MUST be executed appropriately for the active CLI (`claude`, `copilot`, `opencode`, etc.), not by assuming a single tool's command semantics.
+- If `fiassed` is requested but the implementation has no usable enhancement mechanism for the selected plugin/CLI combination, it MUST fail early with a clear error.
 
 Future mode additions MUST only require adding a new mode definition and should not require rewriting the core execution loop structure.
 
@@ -176,7 +191,7 @@ For each language key (`aspnet`, `jsp`, `node`) and each selected mode from `Mod
   # being loaded into this isolated test run.  Do not add instructions here.
   ```
 
-##### 3d. Plugin Installation (securable only)
+##### 3d. Plugin Installation (securable and fiassed)
 
 - Copy plugin assets from the cached clone into the target directory.
 - Assets vary by `[securable_plugin]`:
@@ -186,7 +201,15 @@ For each language key (`aspnet`, `jsp`, `node`) and each selected mode from `Mod
   | `securable-claude-plugin` | `.claude/`, `skills/`, `data/`, `CLAUDE.md` |
   | `securable-copilot` | `.github/` (includes `prompts/`, `agents/`, `copilot-instructions.md`) |
 
-##### 3e. Prompt Construction
+##### 3e. PRD Enhancement (fiassed only)
+
+- After plugin installation and before prompt construction, run a PRD enhancement operation and produce an enhanced PRD.
+- For `securable-claude-plugin`, use the play at `plays/requirements-analysis/prd-fiasse-asvs-enhancement.md`.
+- For other plugin/CLI combinations, execute an equivalent enhancement workflow using the mechanism appropriate to that CLI/plugin.
+- Use the enhanced PRD as `<prd_content>` in the generation prompt.
+- In `DryRun`, print what enhancement step would run without executing it.
+
+##### 3f. Prompt Construction
 
 **Rawdog prompt** (all tools):
 ```
@@ -236,7 +259,7 @@ PRD:
 ---
 ```
 
-##### 3f. Securable Instruction Extraction
+##### 3g. Securable Instruction Extraction
 
 The embedded instructions are read from the plugin clone. Sources vary by plugin:
 
@@ -257,7 +280,7 @@ trust boundaries. Enforce the Derived Integrity Principle for business-critical
 values. Produce structured audit logging for all accountable actions.
 ```
 
-##### 3g. Write Permissions Configuration
+##### 3h. Write Permissions Configuration
 
 Before invoking `[llm_cli_tool]`, configure write permissions so the tool can write to the target directory without interactive prompts:
 
@@ -266,7 +289,7 @@ Before invoking `[llm_cli_tool]`, configure write permissions so the tool can wr
 | `claude` | Write `.claude/claude.json` with `allowed_write_directories` pointing to the target dir |
 | `copilot` | Write `.claude/claude.json` with `allowed_write_directories` listing all target dirs; pass `--add-dir` on invocation |
 
-##### 3h. LLM CLI Invocation
+##### 3i. LLM CLI Invocation
 
 Invoke `[llm_cli_tool]` non-interactively in the target directory. The tool writes generated files directly into the working directory.
 
