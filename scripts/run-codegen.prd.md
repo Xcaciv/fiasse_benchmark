@@ -163,7 +163,6 @@ When `Clean` is specified:
 2. If the directory already exists, skip cloning (print a notice).
 3. Otherwise, run `git clone [plugin_repo_url] [plugin_temp_dir_name]`.
 4. In `DryRun` mode: create a minimal stub directory structure so later steps can reference plugin files.
-5. Read the securable instructions from the cloned plugin into a variable for prompt embedding.
 
 #### Step 3 — Generate per Language × Mode
 
@@ -228,20 +227,16 @@ PRD:
 ---
 ```
 
-**Securable prompt** (all tools):
+**Securable prompt** (plugin-loaded tools):
 ```
 You are operating with the [securable_plugin] active ([context_files] are
 present in this directory).
 
-The following securability engineering instructions are your primary
-constraints — treat them as non-negotiable design requirements.
+Use the installed plugin files in the working directory as the active source of
+securability constraints.
 
-=== [SECURABLE_PLUGIN] INSTRUCTIONS ===
-<embedded_plugin_instructions>
-=== END PLUGIN INSTRUCTIONS ===
-
-Now generate a complete, working [lang_label] project based on the following PRD,
-applying every FIASSE/SSEM constraint above throughout all generated code.
+Generate a complete, working [lang_label] project based on the following PRD,
+applying the plugin's FIASSE/SSEM constraints throughout all generated code.
 
 Create all necessary source files, configuration files, and folder structure
 inside the current working directory.
@@ -259,26 +254,14 @@ PRD:
 ---
 ```
 
-##### 3g. Securable Instruction Extraction
+##### 3g. Plugin-Loaded Constraint Handling
 
-The embedded instructions are read from the plugin clone. Sources vary by plugin:
+For CLIs that automatically load project-local plugin files, the securable prompt
+SHOULD rely on the installed plugin assets rather than duplicating plugin content
+inline in the prompt.
 
-| Plugin | Primary Source | Additional Sources |
-|---|---|---|
-| `securable-claude-plugin` | `CLAUDE.md` | `.claude/commands/secure-generate.md` |
-| `securable-copilot` | `.github/copilot-instructions.md` | `.github/prompts/input-handling.prompt.md`, `.github/prompts/security-requirements.prompt.md` |
-
-A hardcoded fallback MUST exist for when the plugin files are not found:
-```
-Apply FIASSE/SSEM securability engineering principles as hard constraints.
-Satisfy all nine SSEM attributes:
-  Maintainability: Analyzability, Modifiability, Testability
-  Trustworthiness: Confidentiality, Accountability, Authenticity
-  Reliability:     Availability, Integrity, Resilience
-Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all
-trust boundaries. Enforce the Derived Integrity Principle for business-critical
-values. Produce structured audit logging for all accountable actions.
-```
+Implementations MAY still embed workflow content for separate one-off operations
+that are not automatically dispatched by the CLI, such as PRD enhancement plays.
 
 ##### 3h. Write Permissions Configuration
 

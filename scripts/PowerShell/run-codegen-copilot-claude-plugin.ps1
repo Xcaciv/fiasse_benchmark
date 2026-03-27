@@ -26,8 +26,7 @@
         The script clones securable-claude-plugin once, then copies CLAUDE.md,
         .claude/, skills/, and data/ into each securable target directory.
         Copilot CLI auto-discovers .claude/skills/ and reads CLAUDE.md as project
-        context. The /secure-generate command definition is also embedded inline
-        in the prompt for reliability in headless (--yes) mode.
+        context from files in the working directory.
 
     Copilot CLI invocation:
         copilot agent run --prompt-file <file> --yes
@@ -395,46 +394,6 @@ function Install-SecurableCopilotPlugin {
     }
 }
 
-# ---------------------------------------------------------------------------
-# Helper: Read plugin instructions from the securable-claude-plugin layout.
-#
-#   Primary source : CLAUDE.md
-#   Slash command  : .claude/commands/secure-generate.md
-#                    Embedded verbatim so Copilot CLI gets the full intent
-#                    even in headless mode where slash commands are not
-#                    dispatched interactively.
-# ---------------------------------------------------------------------------
-function Get-SecurableInstructions([string]$PluginSource) {
-    $parts = [System.Collections.Generic.List[string]]::new()
-
-    $claudeMd  = Join-Path $PluginSource "CLAUDE.md"
-    $secGenCmd = Join-Path $PluginSource ".claude\commands\secure-generate.md"
-
-    if (Test-Path $claudeMd) {
-        $parts.Add((Get-Content $claudeMd -Raw))
-    }
-    if (Test-Path $secGenCmd) {
-        $parts.Add("---`n# /secure-generate command definition`n" + (Get-Content $secGenCmd -Raw))
-    }
-
-    if ($parts.Count -gt 0) {
-        return $parts -join "`n`n"
-    }
-
-    # Fallback if repo layout differs
-    return @(
-        "Apply FIASSE/SSEM securability engineering principles as hard constraints.",
-        "Satisfy all nine SSEM attributes:",
-        "  Maintainability: Analyzability, Modifiability, Testability",
-        "  Trustworthiness: Confidentiality, Accountability, Authenticity",
-        "  Reliability:     Availability, Integrity, Resilience",
-        "Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all",
-        "trust boundaries. Enforce the Derived Integrity Principle for business-critical",
-        "values. Produce structured audit logging for all accountable actions.",
-        "Use the /secure-generate approach from the securable-claude-plugin."
-    ) -join "`n"
-}
-
 # ===========================================================================
 # MAIN
 # ===========================================================================
@@ -517,8 +476,6 @@ if (Test-Path $PluginTemp) {
         if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
     }
 }
-
-$SecurableInstructions = Get-SecurableInstructions $PluginTemp
 
 $AllTargetDirs = @()
 foreach ($lang in $Languages.Keys) {
@@ -612,18 +569,12 @@ foreach ($langKey in $Languages.Keys) {
             }
 
             $prompt = @(
-                "You are operating with the securable-claude-plugin active (CLAUDE.md and",
-                ".claude/commands/ are present in this directory).",
+                "You are operating inside a project with the securable-claude-plugin installed.",
+                "Use the plugin files already present in this working directory as your source of",
+                "securability constraints while generating the project.",
                 "",
-                "The following securability engineering instructions are your primary",
-                "constraints - treat them as non-negotiable design requirements.",
-                "",
-                "=== SECURABLE-CLAUDE-PLUGIN INSTRUCTIONS ===",
-                $SecurableInstructions,
-                "=== END PLUGIN INSTRUCTIONS ===",
-                "",
-                "Now generate a complete, working $langLabel project based on the following PRD,",
-                "applying every FIASSE/SSEM constraint above throughout all generated code.",
+                "Generate a complete, working $langLabel project based on the following PRD,",
+                "applying the active plugin's FIASSE/SSEM constraints throughout the generated code.",
                 "",
                 "Create all necessary source files, configuration files, and folder structure",
                 "inside the current working directory.",

@@ -39,7 +39,7 @@ Every folder also contains a log file (`claude-output.log` or `copilot-output.lo
 
 Drives Anthropic's Claude Code in non-interactive (`--print`) mode. The PRD prompt is piped via stdin for each language and mode combination.
 
-For `securable` runs, the plugin is activated by copying its `CLAUDE.md`, `.claude/`, `skills/`, and `data/` directories into each target folder. Claude Code automatically reads `CLAUDE.md` from the working directory. The `/secure-generate` slash command definition is also embedded directly in the prompt, since slash commands are not dispatched in `--print` mode.
+For `securable` runs, the plugin is activated by copying its `CLAUDE.md`, `.claude/`, `skills/`, and `data/` directories into each target folder. Claude Code then reads the installed plugin files directly from the working directory during the run.
 
 **Default output directory:** `.\codegen-output`
 
@@ -150,14 +150,14 @@ Understanding how each script activates its plugin explains what the generated o
 
 ### Claude Code — `securable-claude-plugin`
 
-Claude Code reads `CLAUDE.md` from the working directory automatically on startup. The script copies the full plugin tree into each `securable/` target directory before invoking `claude --print`. Because `--print` mode does not dispatch slash commands interactively, the contents of the `/secure-generate` command definition are also injected directly into the prompt.
+Claude Code reads `CLAUDE.md` from the working directory automatically on startup. The script copies the full plugin tree into each `securable/` target directory before invoking `claude --print`, so the active plugin constraints come from the installed files rather than duplicated inline prompt content.
 
 ```
 securable/
 ├── CLAUDE.md                   ← auto-read by Claude Code
 ├── .claude/
 │   └── commands/
-│       └── secure-generate.md  ← embedded inline in the prompt
+│       └── secure-generate.md
 ├── skills/                     ← SSEM skill definitions
 └── data/                       ← FIASSE RFC reference material
 ```

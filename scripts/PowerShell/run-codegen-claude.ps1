@@ -241,41 +241,6 @@ function Install-SecurablePlugin {
     }
 }
 
-# ---------------------------------------------------------------------------
-# Helper: Read the /secure-generate command definition so we can embed it
-#   directly in the prompt. This makes it work reliably in --print mode
-#   where slash commands may not be dispatched automatically.
-# ---------------------------------------------------------------------------
-function Get-SecureGenerateInstructions([string]$PluginSource) {
-    $parts = [System.Collections.Generic.List[string]]::new()
-
-    $claudeMd  = Join-Path $PluginSource "CLAUDE.md"
-    $secGenCmd = Join-Path $PluginSource ".claude\commands\secure-generate.md"
-
-    if (Test-Path $claudeMd) {
-        $parts.Add((Get-Content $claudeMd -Raw))
-    }
-    if (Test-Path $secGenCmd) {
-        $parts.Add("---`n# /secure-generate command definition`n" + (Get-Content $secGenCmd -Raw))
-    }
-
-    if ($parts.Count -gt 0) {
-        return $parts -join "`n`n"
-    }
-
-    # Fallback if plugin files not found
-    return @(
-        "Apply FIASSE/SSEM securability engineering principles as hard constraints.",
-        "Satisfy all nine SSEM attributes:",
-        "  Maintainability: Analyzability, Modifiability, Testability",
-        "  Trustworthiness: Confidentiality, Accountability, Authenticity",
-        "  Reliability:     Availability, Integrity, Resilience",
-        "Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all",
-        "trust boundaries. Enforce the Derived Integrity Principle for business-critical",
-        "values. Produce structured audit logging for all accountable actions."
-    ) -join "`n"
-}
-
 function Get-FiassedPrdContent {
     param(
         [string]$WorkingDir,
@@ -425,8 +390,6 @@ if (Test-Path $PluginTemp) {
     }
 }
 
-$SecureInstructions = Get-SecureGenerateInstructions $PluginTemp
-
 # ---------------------------------------------------------------------------
 # Step 2: Loop over languages x modes
 # ---------------------------------------------------------------------------
@@ -500,7 +463,7 @@ foreach ($langKey in $Languages.Keys) {
                 "---"
             ) -join "`n"
         } else {
-            # securable: install plugin files then embed /secure-generate instructions
+            # securable: install plugin files and let Claude load them from disk
             Install-SecurablePlugin -PluginSource $PluginTemp -TargetDir $targetDir
 
             if ($modeConfig.IsFiassed) {
@@ -508,18 +471,12 @@ foreach ($langKey in $Languages.Keys) {
             }
 
             $prompt = @(
-                "You are operating with the securable-claude-plugin active (CLAUDE.md and",
-                ".claude/commands/ are present in this directory).",
+                "You are operating inside a project with the securable-claude-plugin installed.",
+                "Use the plugin files already present in this working directory as your source of",
+                "securability constraints while generating the project.",
                 "",
-                "The following securability engineering instructions are your primary",
-                "constraints - treat them as non-negotiable design requirements.",
-                "",
-                "=== SECURABLE-CLAUDE-PLUGIN INSTRUCTIONS ===",
-                $SecureInstructions,
-                "=== END PLUGIN INSTRUCTIONS ===",
-                "",
-                "Now generate a complete, working $langLabel project based on the following PRD,",
-                "applying every FIASSE/SSEM constraint above throughout all generated code.",
+                "Generate a complete, working $langLabel project based on the following PRD,",
+                "applying the active plugin's FIASSE/SSEM constraints throughout the generated code.",
                 "",
                 "Create all necessary source files, configuration files, and folder structure",
                 "inside the current working directory.",

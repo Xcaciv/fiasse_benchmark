@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+      "my-source": {
+        "source": {
+          "source": "github",
+          "repo": "your-org/your-plugin-repo"
+        }
+      }
+    },
+  "enabledPlugins": {
+    "securable-claude-plugin@securable-claude-plugins": true
+  }
+}

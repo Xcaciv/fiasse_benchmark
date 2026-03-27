@@ -180,42 +180,6 @@ function Install-SecurableCopilotPlugin {
     }
 }
 
-function Get-SecurableInstructions([string]$PluginSource) {
-    $parts = [System.Collections.Generic.List[string]]::new()
-
-    $instrFile = Join-Path $PluginSource ".github\copilot-instructions.md"
-    if (Test-Path $instrFile) {
-        $parts.Add((Get-Content $instrFile -Raw))
-    }
-
-    $promptFiles = @(
-        ".github\prompts\input-handling.prompt.md",
-        ".github\prompts\security-requirements.prompt.md"
-    )
-
-    foreach ($rel in $promptFiles) {
-        $full = Join-Path $PluginSource $rel
-        if (Test-Path $full) {
-            $parts.Add("---`n# $(Split-Path $rel -Leaf)`n" + (Get-Content $full -Raw))
-        }
-    }
-
-    if ($parts.Count -gt 0) {
-        return $parts -join "`n`n"
-    }
-
-    return @(
-        "Apply FIASSE/SSEM securability engineering principles throughout.",
-        "Satisfy all nine SSEM attributes:",
-        "  Maintainability: Analyzability, Modifiability, Testability",
-        "  Trustworthiness: Confidentiality, Accountability, Authenticity",
-        "  Reliability:     Availability, Integrity, Resilience",
-        "Apply canonical input handling (Canonicalize -> Sanitize -> Validate) at all",
-        "trust boundaries. Enforce the Derived Integrity Principle for business-critical",
-        "values. Produce structured audit logging for all accountable actions."
-    ) -join "`n"
-}
-
 $OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
 
 # ---------------------------------------------------------------------------
@@ -280,8 +244,6 @@ if (Test-Path $PluginTemp) {
         if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
     }
 }
-
-$SecurableInstructions = Get-SecurableInstructions $PluginTemp
 
 $AllTargetDirs = @()
 foreach ($lang in $Languages.Keys) {
@@ -349,17 +311,12 @@ foreach ($langKey in $Languages.Keys) {
             Install-SecurableCopilotPlugin -PluginSource $PluginTemp -TargetDir $targetDir
 
             $prompt = @(
-                "You are operating with the securable-copilot FIASSE plugin active.",
-                "The following securability engineering instructions and prompts are your",
-                "primary constraints - treat them as non-negotiable design requirements,",
-                "not optional guidelines.",
+                "You are operating inside a project with the securable-copilot plugin installed.",
+                "Use the plugin files already present in this working directory as your source of",
+                "securability constraints while generating the project.",
                 "",
-                "=== SECURABLE-COPILOT PLUGIN INSTRUCTIONS ===",
-                $SecurableInstructions,
-                "=== END PLUGIN INSTRUCTIONS ===",
-                "",
-                "Now generate a complete, working $langLabel project based on the following PRD,",
-                "applying every FIASSE/SSEM constraint above throughout all generated code.",
+                "Generate a complete, working $langLabel project based on the following PRD,",
+                "applying the active plugin's FIASSE/SSEM constraints throughout the generated code.",
                 "",
                 "Create all necessary source files, configuration files, and folder structure",
                 "inside the current working directory.",
